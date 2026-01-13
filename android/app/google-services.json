@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "351569656155",
+    "project_id": "parcelocfobr",
+    "storage_bucket": "parcelocfobr.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:351569656155:android:0f6a731d4af99978bcc27e",
+        "android_client_info": {
+          "package_name": "com.tora_mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "351569656155-869nnvclui2fevgn1v688aj9a0fljglf.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyChLk8FkGQPzcd_g7G2GmK5YDNlpCHicec"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "351569656155-869nnvclui2fevgn1v688aj9a0fljglf.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
