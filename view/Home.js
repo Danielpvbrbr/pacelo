@@ -17,32 +17,35 @@ export default function Home({ navigation }) {
   const [itemSelecionado, setItemSelecionado] = useState(null);
   const [menuAddAberto, setMenuAddAberto] = useState(false);
 
-  // Carrega e Processa tudo
+  const formatarMoeda = (valor) => {
+    return 'R$ ' + valor.toFixed(2).replace('.', ',').replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.');
+  };
+
   const carregarDados = async () => {
     try {
-      // 1. Perfil
       const perfilJson = await AsyncStorage.getItem('@pacelo_perfil');
       if (perfilJson) setNomeUsuario(JSON.parse(perfilJson).nome);
 
-      // 2. Dados Brutos
       const dividasJson = await AsyncStorage.getItem('@pacelo_db');
       let listaDividas = dividasJson ? JSON.parse(dividasJson) : [];
 
       const ganhosJson = await AsyncStorage.getItem('@pacelo_ganhos');
       const listaGanhos = ganhosJson ? JSON.parse(ganhosJson) : [];
 
-      // 3. EXECUTA AUTOMAÇÃO (O Robô)
+      // --- AUTOMAÇÃO ---
       const { dividasAtualizadas, pagouAlgo } = verificarAutomacao(listaDividas);
-      
-      // Se o robô pagou algo, salva a lista atualizada
       if (pagouAlgo) {
         listaDividas = dividasAtualizadas;
         await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaDividas));
-        Alert.alert("🤖 Pacelo Automático", "Algumas contas vencidas foram debitadas automaticamente do seu saldo.");
+        Alert.alert("🤖 Pacelo Automático", "Algumas contas vencidas foram debitadas automaticamente.");
       }
 
-      setDados(listaDividas);
-      calcularFluxoCaixa(listaDividas, listaGanhos);
+      // --- FILTRO DE ARQUIVADOS (NOVO) ---
+      // Só mostra na tela e conta no saldo o que NÃO estiver arquivado
+      const listaAtiva = listaDividas.filter(item => !item.arquivado);
+
+      setDados(listaAtiva);
+      calcularFluxoCaixa(listaAtiva, listaGanhos);
 
     } catch (e) {
       console.log('Erro ao ler dados', e);
@@ -51,17 +54,54 @@ export default function Home({ navigation }) {
 
   useFocusEffect(useCallback(() => { carregarDados(); }, []));
 
-  // Função do Robô: Procura contas autoPay vencidas e não pagas
+  // --- FUNÇÕES DE ARQUIVAMENTO (NOVO) ---
+  const confirmarArquivamento = (item) => {
+    Alert.alert(
+      "Ignorar Compra?",
+      `Deseja arquivar "${item.nome}"? Ela vai sumir da sua lista e do cálculo de saldo, mas não será apagada do banco.`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Sim, Arquivar", 
+          onPress: () => arquivarItem(item.id),
+          style: 'destructive'
+        }
+      ]
+    );
+  };
+
+  const arquivarItem = async (id) => {
+    try {
+      const dividasJson = await AsyncStorage.getItem('@pacelo_db');
+      let lista = dividasJson ? JSON.parse(dividasJson) : [];
+
+      // Encontra o item e marca como arquivado
+      const novaLista = lista.map(item => {
+        if (item.id === id) {
+          return { ...item, arquivado: true };
+        }
+        return item;
+      });
+
+      await AsyncStorage.setItem('@pacelo_db', JSON.stringify(novaLista));
+      carregarDados(); // Recarrega a tela (o item vai sumir)
+      
+    } catch (e) {
+      Alert.alert("Erro", "Não foi possível arquivar.");
+    }
+  };
+  // --------------------------------------
+
   const verificarAutomacao = (dividas) => {
     let pagouAlgo = false;
     const hoje = new Date();
-    hoje.setHours(0,0,0,0); // Zera hora pra comparar só data
+    hoje.setHours(0,0,0,0); 
 
     dividas.forEach(item => {
-        if (item.autoPay) { // Se o usuário marcou "Automático"
+        // Se estiver arquivado, o robô ignora também
+        if (item.autoPay && !item.arquivado) { 
             item.parcelas.forEach(p => {
                 const dataVenc = new Date(p.vencimento);
-                // Se venceu hoje ou antes E não está pago
                 if (!p.pago && dataVenc <= hoje) {
                     p.pago = true;
                     pagouAlgo = true;
@@ -76,26 +116,21 @@ export default function Home({ navigation }) {
   const calcularFluxoCaixa = (dividas, ganhos) => {
     const hoje = new Date();
     
-    // --- LÓGICA DE GANHO RECORRENTE ---
-    // Só soma o ganho se a data dele já passou ou é hoje.
-    // Ex: Salário de Dezembro não entra no saldo de Janeiro.
     let totalEntradas = 0;
-    
     ganhos.forEach(item => {
         item.parcelas.forEach(p => {
             const dataRecebimento = new Date(p.vencimento);
-            // Se a data do ganho já chegou, considera como dinheiro em caixa
             if (dataRecebimento <= hoje) {
                 totalEntradas += p.valor;
             }
         });
     });
 
-    // --- LÓGICA DE DÍVIDAS ---
     let totalSaidas = 0;
     dividas.forEach(item => {
+      // Itens arquivados já foram filtrados antes de chegar aqui
       const valorPagoNessaDivida = item.parcelas
-        .filter(p => p.pago) // Só conta o que tá marcado como PAGO
+        .filter(p => p.pago)
         .reduce((acc, p) => acc + p.valor, 0);
       totalSaidas += valorPagoNessaDivida;
     });
@@ -108,8 +143,18 @@ export default function Home({ navigation }) {
   };
 
   const pagarProximaParcela = async (itemIndex) => {
-    const novaLista = [...dados];
-    const item = novaLista[itemIndex];
+    // Atenção: 'dados' aqui já é a lista filtrada (sem arquivados)
+    // Precisamos achar o item no banco original pelo ID para salvar corretamente
+    const itemTela = dados[itemIndex];
+
+    const dividasJson = await AsyncStorage.getItem('@pacelo_db');
+    let listaCompleta = dividasJson ? JSON.parse(dividasJson) : [];
+    
+    // Acha o índice real no banco completo
+    const indexReal = listaCompleta.findIndex(i => i.id === itemTela.id);
+    if (indexReal === -1) return;
+
+    const item = listaCompleta[indexReal];
     const parcelaIndex = item.parcelas.findIndex(p => !p.pago);
 
     if (parcelaIndex === -1) return;
@@ -122,9 +167,10 @@ export default function Home({ navigation }) {
     }
 
     item.parcelas[parcelaIndex].pago = true;
-    await AsyncStorage.setItem('@pacelo_db', JSON.stringify(novaLista));
+    listaCompleta[indexReal] = item; // Atualiza na lista completa
+
+    await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaCompleta));
     
-    // Recarrega tudo para atualizar saldos
     carregarDados();
     
     if (itemSelecionado && itemSelecionado.id === item.id) setItemSelecionado(item);
@@ -147,32 +193,67 @@ export default function Home({ navigation }) {
 
   const renderItem = ({ item, index }) => {
     const proxima = item.parcelas.find(p => !p.pago);
+    
     const pagasQtd = item.parcelas.filter(p => p.pago).length;
     const totalQtd = item.parcelas.length;
+    const restantesQtd = totalQtd - pagasQtd;
+    
+    const valorPagoAcumulado = item.parcelas.filter(p => p.pago).reduce((acc, p) => acc + p.valor, 0);
+    const valorRestantePagar = item.valorTotal - valorPagoAcumulado;
+    
     const progresso = pagasQtd / totalQtd;
 
     return (
-      <TouchableOpacity style={styles.card} activeOpacity={0.9} onPress={() => abrirDetalhes(item)}>
+      <TouchableOpacity 
+        style={styles.card} 
+        activeOpacity={0.9} 
+        onPress={() => abrirDetalhes(item)}
+        onLongPress={() => confirmarArquivamento(item)} // <--- A MÁGICA AQUI
+        delayLongPress={800} // Precisa segurar por 0.8s
+      >
+        
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitulo}>{item.nome}</Text>
-          <View style={{alignItems: 'flex-end'}}>
-             <Text style={styles.cardValorTotal}>Total: R$ {item.valorTotal.toFixed(2)}</Text>
-             {item.autoPay && <Text style={styles.badgeAuto}>Automático ⚡</Text>}
-          </View>
+          {item.autoPay && <Text style={styles.badgeAuto}>Automático ⚡</Text>}
         </View>
         
         <View style={styles.barraFundo}>
           <View style={[styles.barraPreenchida, { width: `${progresso * 100}%` }]} />
         </View>
 
+        <View style={styles.statsContainer}>
+            <View style={styles.colunaStat}>
+                <Text style={styles.labelStat}>Total</Text>
+                <Text style={styles.valorStat}>{formatarMoeda(item.valorTotal)}</Text>
+            </View>
+            <View style={styles.separadorVertical} />
+            <View style={styles.colunaStat}>
+                <Text style={styles.labelStat}>Pago</Text>
+                <Text style={[styles.valorStat, {color: '#22c55e'}]}>{formatarMoeda(valorPagoAcumulado)}</Text>
+            </View>
+            <View style={styles.separadorVertical} />
+            <View style={styles.colunaStat}>
+                <Text style={styles.labelStat}>Falta</Text>
+                <Text style={[styles.valorStat, {color: '#ef4444'}]}>{formatarMoeda(valorRestantePagar)}</Text>
+            </View>
+        </View>
+        
+        <View style={styles.infoParcelasRow}>
+            <Text style={styles.txtInfoParcelas}>
+                {pagasQtd} Pagas • Restam {restantesQtd}
+            </Text>
+            <Text style={styles.txtInfoParcelasTotal}>
+                {pagasQtd}/{totalQtd}
+            </Text>
+        </View>
+
         {proxima ? (
           <View style={styles.areaAcao}>
             <View>
               <Text style={styles.labelVencimento}>Vence {formatarData(proxima.vencimento)}</Text>
-              <Text style={styles.valorParcela}>R$ {proxima.valor.toFixed(2)}</Text>
+              <Text style={styles.valorParcela}>{formatarMoeda(proxima.valor)}</Text>
             </View>
             
-            {/* Se for automático, mostra aviso ao invés do botão pagar, ou deixa ambos */}
             {item.autoPay ? (
                 <View style={styles.boxAuto}>
                     <Text style={styles.txtAuto}>Débito Auto.</Text>
@@ -184,7 +265,7 @@ export default function Home({ navigation }) {
             )}
           </View>
         ) : (
-          <View style={styles.quitado}><Text style={styles.txtQuitado}>QUITADO 🎉</Text></View>
+          <View style={styles.quitado}><Text style={styles.txtQuitado}>DÍVIDA QUITADA 🎉</Text></View>
         )}
       </TouchableOpacity>
     );
@@ -203,17 +284,17 @@ export default function Home({ navigation }) {
       <View style={styles.painelFinanceiro}>
         <View style={styles.painelLinha}>
             <Text style={styles.painelLabel}>Entradas (Até Hoje)</Text>
-            <Text style={styles.painelValorVerde}>R$ {financeiro.totalGanhos.toFixed(2)}</Text>
+            <Text style={styles.painelValorVerde}>{formatarMoeda(financeiro.totalGanhos)}</Text>
         </View>
         <View style={styles.painelLinha}>
             <Text style={styles.painelLabel}>Saídas Realizadas</Text>
-            <Text style={styles.painelValorVermelho}>- R$ {financeiro.totalPago.toFixed(2)}</Text>
+            <Text style={styles.painelValorVermelho}>- {formatarMoeda(financeiro.totalPago)}</Text>
         </View>
         <View style={styles.divisor} />
         <View style={styles.painelLinha}>
             <Text style={styles.saldoLabel}>SALDO ATUAL</Text>
             <Text style={[styles.saldoValor, { color: financeiro.saldoAtual >= 0 ? '#22c55e' : '#ef4444' }]}>
-                R$ {financeiro.saldoAtual.toFixed(2)}
+                {formatarMoeda(financeiro.saldoAtual)}
             </Text>
         </View>
       </View>
@@ -230,10 +311,10 @@ export default function Home({ navigation }) {
       {menuAddAberto && (
         <View style={styles.menuAddContainer}>
           <TouchableOpacity style={[styles.menuOpcao, {backgroundColor: '#22c55e'}]} onPress={() => irParaCadastro('ganho')}>
-            <Text style={styles.menuTexto}>💰 Ganho</Text>
+            <Text style={styles.menuTexto}>Ganho</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.menuOpcao, {backgroundColor: '#ef4444'}]} onPress={() => irParaCadastro('despesa')}>
-            <Text style={styles.menuTexto}>💸 Dívida</Text>
+            <Text style={styles.menuTexto}>Dívida</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -252,12 +333,15 @@ export default function Home({ navigation }) {
                     <Text style={styles.modalTitulo}>{itemSelecionado?.nome}</Text>
                     <TouchableOpacity onPress={() => setModalVisible(false)}><Text style={styles.modalFechar}>X</Text></TouchableOpacity>
                 </View>
+                <View style={styles.resumoModal}>
+                     <Text style={styles.txtResumoModal}>Total: {itemSelecionado && formatarMoeda(itemSelecionado.valorTotal)}</Text>
+                </View>
                 <ScrollView style={styles.modalLista}>
                     {itemSelecionado?.parcelas.map((p, index) => (
                         <View key={index} style={[styles.linhaParcela, p.pago ? styles.linhaPaga : null]}>
                             <Text style={styles.txtNumero}>#{p.numero}</Text>
                             <Text style={styles.txtData}>{formatarData(p.vencimento)}</Text>
-                            <Text style={[styles.txtValor, p.pago && styles.txtValorPago]}>R$ {p.valor.toFixed(2)}</Text>
+                            <Text style={[styles.txtValor, p.pago && styles.txtValorPago]}>{formatarMoeda(p.valor)}</Text>
                         </View>
                     ))}
                 </ScrollView>
@@ -288,14 +372,23 @@ const styles = StyleSheet.create({
   tituloLista: { marginLeft: 20, marginBottom: 10, fontSize: 18, fontWeight: 'bold', color: '#334155' },
 
   card: { backgroundColor: '#fff', borderRadius: 12, padding: 15, marginBottom: 15, elevation: 2 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  cardTitulo: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
-  cardValorTotal: { fontSize: 12, color: '#64748b' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  cardTitulo: { fontSize: 18, fontWeight: 'bold', color: '#1e293b' },
   badgeAuto: { fontSize: 10, color: '#eab308', fontWeight: 'bold' },
   
-  barraFundo: { height: 4, backgroundColor: '#f1f5f9', borderRadius: 3, marginBottom: 15, overflow: 'hidden' },
+  barraFundo: { height: 4, backgroundColor: '#f1f5f9', borderRadius: 3, marginVertical: 10, overflow: 'hidden' },
   barraPreenchida: { height: '100%', backgroundColor: '#22c55e' },
   
+  statsContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#f8fafc', padding: 10, borderRadius: 8, marginBottom: 10 },
+  colunaStat: { alignItems: 'center', flex: 1 },
+  separadorVertical: { width: 1, backgroundColor: '#cbd5e1' },
+  labelStat: { fontSize: 10, color: '#64748b', textTransform: 'uppercase', marginBottom: 2 },
+  valorStat: { fontSize: 12, fontWeight: 'bold', color: '#334155' },
+
+  infoParcelasRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  txtInfoParcelas: { fontSize: 12, color: '#64748b' },
+  txtInfoParcelasTotal: { fontSize: 12, fontWeight: 'bold', color: '#334155' },
+
   areaAcao: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 10 },
   labelVencimento: { fontSize: 12, color: '#ef4444', fontWeight: 'bold' },
   valorParcela: { fontSize: 18, color: '#1e293b', fontWeight: 'bold' },
@@ -316,9 +409,11 @@ const styles = StyleSheet.create({
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#fff', height: '60%', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   modalTitulo: { fontSize: 20, fontWeight: 'bold', color: '#0f172a' },
   modalFechar: { fontSize: 20, color: '#94a3b8' },
+  resumoModal: { marginBottom: 10 },
+  txtResumoModal: { fontSize: 16, fontWeight: 'bold', color: '#334155' },
   linhaParcela: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   linhaPaga: { opacity: 0.5 },
   txtNumero: { fontWeight: 'bold', color: '#334155' },

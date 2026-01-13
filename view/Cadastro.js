@@ -1,151 +1,243 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Switch } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function Cadastro({ navigation, route }) {
-  // Recebe o tipo (despesa ou ganho) vindo da tela anterior
   const { tipoOperacao } = route.params || { tipoOperacao: 'despesa' };
-  
-  const [nome, setNome] = useState('');
-  const [valorTotal, setValorTotal] = useState('');
-  const [tipo, setTipo] = useState('fixa'); 
-  const [frequencia, setFrequencia] = useState('Mensal');
-  const [qtdParcelas, setQtdParcelas] = useState('1');
-  const [diaVencimento, setDiaVencimento] = useState(new Date().getDate().toString());
+  const isDespesa = tipoOperacao === 'despesa';
 
-  const corTema = tipoOperacao === 'despesa' ? '#ef4444' : '#22c55e'; // Vermelho ou Verde
+  const [nome, setNome] = useState('');
+  const [valorTotal, setValorTotal] = useState('0,00'); 
+  
+  const hoje = new Date();
+  const hojeFormatado = `${hoje.getDate().toString().padStart(2,'0')}/${(hoje.getMonth()+1).toString().padStart(2,'0')}/${hoje.getFullYear()}`;
+  
+  const [dataCompra, setDataCompra] = useState(hojeFormatado);
+  const [qtdParcelas, setQtdParcelas] = useState('1');
+  const [diaVencimento, setDiaVencimento] = useState('');
+
+  const corTema = isDespesa ? '#ef4444' : '#22c55e';
+
+  const handleValorChange = (texto) => {
+    let v = texto.replace(/\D/g, '');
+    v = (Number(v) / 100).toFixed(2) + '';
+    v = v.replace('.', ',');
+    v = v.replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.');
+    setValorTotal(v);
+  };
+
+  const handleDataChange = (texto) => {
+    let v = texto.replace(/\D/g, '');
+    if (v.length > 8) v = v.substring(0, 8);
+    if (v.length > 4) {
+        v = `${v.substring(0, 2)}/${v.substring(2, 4)}/${v.substring(4)}`;
+    } else if (v.length > 2) {
+        v = `${v.substring(0, 2)}/${v.substring(2)}`;
+    }
+    setDataCompra(v);
+  };
+
+  const finalizarSalvamento = async (registroFinal) => {
+    try {
+      const keyDb = isDespesa ? '@pacelo_db' : '@pacelo_ganhos';
+      const dadosAntigos = await AsyncStorage.getItem(keyDb);
+      const listaAntiga = dadosAntigos ? JSON.parse(dadosAntigos) : [];
+      const novaLista = [...listaAntiga, registroFinal];
+      
+      await AsyncStorage.setItem(keyDb, JSON.stringify(novaLista));
+      Alert.alert('Sucesso', 'Registro salvo!');
+      navigation.goBack();
+    } catch (e) {
+      Alert.alert('Erro', 'Falha ao salvar no banco.');
+    }
+  };
 
   const salvar = async () => {
-    if (!nome || !valorTotal || !diaVencimento) {
-      Alert.alert('Atenção', 'Preencha os campos obrigatórios.');
+    // --- VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS ---
+    if (!nome.trim()) {
+      Alert.alert('Faltou o Nome', 'Por favor, digite uma descrição para o lançamento.');
+      return;
+    }
+    if (valorTotal === '0,00') {
+      Alert.alert('Valor Zerado', 'O valor não pode ser zero.');
       return;
     }
 
-    const valorNum = parseFloat(valorTotal.replace(',', '.'));
-    const parcelasNum = tipo === 'parcelada' ? parseInt(qtdParcelas) : 1;
-    const valorParcela = valorNum / parcelasNum;
+    if (isDespesa) {
+        if (dataCompra.length < 10) {
+            Alert.alert('Data Inválida', 'Preencha a Data da Compra corretamente (Dia/Mês/Ano).');
+            return;
+        }
+        if (!diaVencimento) {
+            Alert.alert('Dia do Vencimento', 'Informe o dia que a fatura vence (1 a 31).');
+            return;
+        }
+        if (!qtdParcelas) {
+            Alert.alert('Parcelas', 'Informe a quantidade de parcelas (mínimo 1).');
+            return;
+        }
+    }
+    // ----------------------------------------
 
-    // Gerar parcelas
-    let listaParcelas = [];
-    let hoje = new Date();
-    let dataBase = new Date(hoje.getFullYear(), hoje.getMonth(), parseInt(diaVencimento));
+    const valorLimpo = valorTotal.replace(/\./g, '').replace(',', '.');
+    const valorNum = parseFloat(valorLimpo);
+
+    const partesData = dataCompra.split('/');
+    const diaCompra = parseInt(partesData[0]);
+    const mesCompra = parseInt(partesData[1]) - 1;
+    const anoCompra = parseInt(partesData[2]);
+    const objetoDataCompra = new Date(anoCompra, mesCompra, diaCompra);
+
+    let parcelasInput = parseInt(qtdParcelas);
+    if (isNaN(parcelasInput) || parcelasInput < 1) parcelasInput = 1;
     
-    if (dataBase < hoje) {
-      dataBase.setMonth(dataBase.getMonth() + 1);
+    const numeroDeVezes = isDespesa ? parcelasInput : 1;
+    const valorDaParcela = valorNum / numeroDeVezes;
+
+    let diaVenc = parseInt(diaVencimento);
+    let dataPrimeiraParcela = new Date(anoCompra, mesCompra, diaVenc);
+    if (diaVenc <= diaCompra) {
+        dataPrimeiraParcela.setMonth(dataPrimeiraParcela.getMonth() + 1);
     }
 
-    for (let i = 0; i < parcelasNum; i++) {
-      let dataVenc = new Date(dataBase);
-      // Removemos diário e semanal. Ficou simples.
-      if (frequencia === 'Mensal') dataVenc.setMonth(dataBase.getMonth() + i);
-      if (frequencia === 'Anual') dataVenc.setFullYear(dataBase.getFullYear() + i);
-      if (frequencia === 'Única') { /* Não muda data */ }
+    let listaParcelas = [];
+    let temParcelaVencida = false;
+    const dataHoje = new Date();
+    dataHoje.setHours(0,0,0,0); 
+
+    for (let i = 0; i < numeroDeVezes; i++) {
+      let dataVenc = new Date(dataPrimeiraParcela);
+      dataVenc.setMonth(dataPrimeiraParcela.getMonth() + i);
+      
+      if (dataVenc < dataHoje) {
+        temParcelaVencida = true;
+      }
 
       listaParcelas.push({
         numero: i + 1,
-        valor: valorParcela,
+        valor: valorDaParcela,
         vencimento: dataVenc.toISOString(),
-        pago: false
+        pago: false 
       });
     }
 
     const novoRegistro = {
       id: Date.now().toString(),
       nome,
-      categoria: tipo === 'fixa' ? (tipoOperacao === 'despesa' ? 'Fixa' : 'Salário') : 'Parcelado',
-      frequencia,
+      categoria: isDespesa ? (numeroDeVezes > 1 ? 'Parcelado' : 'Fixa') : 'Entrada',
+      frequencia: isDespesa ? (numeroDeVezes > 1 ? 'Mensal' : 'Única') : 'Única',
       valorTotal: valorNum,
       parcelas: listaParcelas,
-      tipo: tipoOperacao // 'despesa' ou 'ganho'
+      tipo: tipoOperacao,
+      arquivado: false,
+      autoPay: false,
+      dataCriacao: objetoDataCompra.toISOString()
     };
 
-    try {
-      // Define qual banco usar
-      const keyDb = tipoOperacao === 'despesa' ? '@pacelo_db' : '@pacelo_ganhos';
-      
-      const dadosAntigos = await AsyncStorage.getItem(keyDb);
-      const listaAntiga = dadosAntigos ? JSON.parse(dadosAntigos) : [];
-      const novaLista = [...listaAntiga, novoRegistro];
-      
-      await AsyncStorage.setItem(keyDb, JSON.stringify(novaLista));
-      Alert.alert('Sucesso', `${tipoOperacao === 'despesa' ? 'Dívida' : 'Ganho'} salvo com sucesso!`);
-      navigation.goBack();
-    } catch (e) {
-      Alert.alert('Erro', 'Falha ao salvar.');
+    if (isDespesa && temParcelaVencida) {
+        Alert.alert(
+            "Parcelas Passadas 📅",
+            "Existem parcelas com data antiga. O que deseja fazer?",
+            [
+                { 
+                    text: "Deixar em aberto", 
+                    onPress: () => finalizarSalvamento(novoRegistro) 
+                },
+                { 
+                    text: "Marcar como PAGAS", 
+                    onPress: () => {
+                        novoRegistro.parcelas.forEach(p => {
+                            if (new Date(p.vencimento) < dataHoje) {
+                                p.pago = true;
+                            }
+                        });
+                        finalizarSalvamento(novoRegistro);
+                    }
+                }
+            ]
+        );
+    } else {
+        finalizarSalvamento(novoRegistro);
     }
   };
 
   return (
     <ScrollView style={styles.container}>
       <Text style={[styles.titulo, { color: corTema }]}>
-        {tipoOperacao === 'despesa' ? 'Nova Dívida 💸' : 'Novo Ganho 💰'}
+        {isDespesa ? 'Nova Dívida' : 'Entrada'}
       </Text>
       
       <Text style={styles.label}>Descrição</Text>
       <TextInput 
         style={styles.input} 
-        placeholder={tipoOperacao === 'despesa' ? "Ex: Aluguel, Carro..." : "Ex: Salário, Freela..."}
+        placeholder={isDespesa ? "Ex: Mercado, Tênis, Luz..." : "Ex: Salário, Venda..."}
+        placeholderTextColor="#94a3b8"
         value={nome}
         onChangeText={setNome}
       />
 
       <Text style={styles.label}>Valor Total (R$)</Text>
       <TextInput 
-        style={styles.input} 
-        placeholder="0.00" 
+        style={[styles.input, styles.inputValor, { color: corTema, width: 200 }]} 
+        placeholder="0,00" 
+        placeholderTextColor="#cbd5e1"
         keyboardType="numeric"
         value={valorTotal}
-        onChangeText={setValorTotal}
+        onChangeText={handleValorChange}
       />
 
-      <View style={styles.row}>
-        <Text style={styles.labelSwitch}>É Parcelado?</Text>
-        <Switch 
-          value={tipo === 'parcelada'} 
-          onValueChange={(val) => setTipo(val ? 'parcelada' : 'fixa')}
-          trackColor={{ false: "#767577", true: corTema }}
-        />
-      </View>
+      {isDespesa && (
+        <View style={styles.boxDespesa}>
+            
+            {/* Campo de Data Isolado para ter espaço */}
+            <Text style={styles.label}>Data da Compra</Text>
+            <TextInput 
+                style={styles.input} 
+                placeholder="DD/MM/AAAA" 
+                placeholderTextColor="#94a3b8"
+                keyboardType="numeric"
+                maxLength={10}
+                value={dataCompra}
+                onChangeText={handleDataChange}
+            />
 
-      {tipo === 'parcelada' && (
-        <>
-          <Text style={styles.label}>Quantidade de Vezes</Text>
-          <TextInput 
-            style={styles.input} 
-            placeholder="Ex: 12" 
-            keyboardType="numeric"
-            value={qtdParcelas}
-            onChangeText={setQtdParcelas}
-          />
-        </>
+            {/* Linha com Parcelas e Vencimento Lado a Lado (Menores) */}
+            <View style={styles.rowInputs}>
+                <View style={{flex: 1, marginRight: 8}}>
+                    <Text style={styles.label}>Parcelas</Text>
+                    <TextInput 
+                        style={styles.inputPequeno} 
+                        placeholder="1" 
+                        placeholderTextColor="#94a3b8"
+                        keyboardType="numeric"
+                        value={qtdParcelas}
+                        onChangeText={setQtdParcelas}
+                    />
+                    <Text style={styles.helpText}>Vazio = À vista</Text>
+                </View>
+
+                <View style={{flex: 1, marginLeft: 8}}>
+                    <Text style={styles.label}>Dia Venc.</Text>
+                    <TextInput 
+                        style={styles.inputPequeno} 
+                        placeholder="Ex: 10" 
+                        placeholderTextColor="#94a3b8"
+                        keyboardType="numeric"
+                        maxLength={2}
+                        value={diaVencimento}
+                        onChangeText={setDiaVencimento}
+                    />
+                    <Text style={styles.helpText}>Dia do Mês</Text>
+                </View>
+            </View>
+
+        </View>
       )}
 
-      <Text style={styles.label}>Frequência</Text>
-      <View style={styles.botoesFreq}>
-        {/* OPÇÕES LIMPAS AGORA */}
-        {['Mensal', 'Única', 'Anual'].map((f) => (
-          <TouchableOpacity 
-            key={f} 
-            style={[styles.btnFreq, frequencia === f && { backgroundColor: corTema, borderColor: corTema }]}
-            onPress={() => setFrequencia(f)}
-          >
-            <Text style={[styles.txtFreq, frequencia === f && styles.txtFreqAtivo]}>{f}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <Text style={styles.label}>Dia do {tipoOperacao === 'despesa' ? 'Vencimento' : 'Recebimento'}</Text>
-      <TextInput 
-        style={styles.input} 
-        placeholder="Dia (1-31)" 
-        keyboardType="numeric"
-        maxLength={2}
-        value={diaVencimento}
-        onChangeText={setDiaVencimento}
-      />
-
       <TouchableOpacity style={[styles.botaoSalvar, { backgroundColor: corTema }]} onPress={salvar}>
-        <Text style={styles.textoBotao}>Salvar</Text>
+        <Text style={styles.textoBotao}>
+            {isDespesa ? 'Salvar Dívida' : 'Salvar Entrada'}
+        </Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.botaoVoltar} onPress={() => navigation.goBack()}>
@@ -158,21 +250,30 @@ export default function Cadastro({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#f8fafc' },
-  titulo: { fontSize: 24, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  label: { fontSize: 14, color: '#64748b', marginBottom: 5, fontWeight: '600' },
-  labelSwitch: { fontSize: 16, color: '#1e293b', fontWeight: 'bold' },
+  container: { flex: 1, padding: 25, backgroundColor: '#f8fafc' },
+  titulo: { fontSize: 26, fontWeight: 'bold', marginBottom: 25, textAlign: 'center' },
+  
+  label: { fontSize: 14, color: '#64748b', marginBottom: 6, fontWeight: '600' },
+  helpText: { fontSize: 11, color: '#94a3b8', marginTop: 4, textAlign: 'center' },
+
   input: {
-    backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8,
-    padding: 12, fontSize: 16, marginBottom: 15, color: '#0f172a'
+    backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 12,
+    padding: 15, fontSize: 16, marginBottom: 20, color: '#0f172a'
   },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  botoesFreq: { flexDirection: 'row', marginBottom: 15 },
-  btnFreq: { padding: 10, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 20, marginRight: 10 },
-  txtFreq: { color: '#64748b' },
-  txtFreqAtivo: { color: '#fff', fontWeight: 'bold' },
-  botaoSalvar: { padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 10 },
-  botaoVoltar: { padding: 15, alignItems: 'center', marginTop: 5 },
-  textoBotao: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  textoVoltar: { color: '#64748b' }
+  inputValor: { fontSize: 28, fontWeight: 'bold' },
+  
+  boxDespesa: { marginTop: 5 },
+  rowInputs: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  
+  // Estilo novo para os campos menores lado a lado
+  inputPequeno: {
+    backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 12,
+    padding: 15, fontSize: 16, textAlign: 'center', color: '#0f172a', fontWeight: 'bold'
+  },
+
+  botaoSalvar: { padding: 18, borderRadius: 14, alignItems: 'center', marginTop: 20, elevation: 3 },
+  textoBotao: { color: '#fff', fontWeight: 'bold', fontSize: 18 },
+  
+  botaoVoltar: { padding: 15, alignItems: 'center', marginTop: 10 },
+  textoVoltar: { color: '#64748b', fontSize: 16 }
 });
