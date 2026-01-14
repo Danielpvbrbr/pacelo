@@ -136,7 +136,7 @@ export default function Cadastro({ navigation, route }) {
 
     if (isDespesa && temParcelaVencida) {
         Alert.alert(
-            "Parcelas Passadas 📅",
+            "Parcelas Passadas",
             "Existem parcelas com data antiga. O que deseja fazer?",
             [
                 { 

@@ -8,6 +8,7 @@ import Home from './view/Home';
 import Cadastro from './view/Cadastro';
 import Ganhos from './view/Ganhos';
 import Configuracao from './view/Configuracao';
+import Historico from './view/Historico';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -18,9 +19,10 @@ function TabsHome() {
       headerShown: false,
       tabBarIcon: ({ focused }) => {
         let iconName;
-        if (route.name === 'Dívidas') iconName = '📉';
-        if (route.name === 'Ganhos') iconName = '📈';
-        if (route.name === 'Perfil') iconName = '⚙️';
+        if (route.name === 'Dívidas') iconName = '💸';
+        if (route.name === 'Ganhos') iconName = '💰';
+        if (route.name === 'Histórico') iconName = '🏆';
+        if (route.name === 'Perfil') iconName = '👤';
 
         return <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>{iconName}</Text>;
       },
@@ -31,6 +33,7 @@ function TabsHome() {
     >
       <Tab.Screen name="Dívidas" component={Home} />
       <Tab.Screen name="Ganhos" component={Ganhos} />
+      <Tab.Screen name="Histórico" component={Historico} />
       <Tab.Screen name="Perfil" component={Configuracao} />
     </Tab.Navigator>
   );

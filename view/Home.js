@@ -1,11 +1,14 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, StatusBar, Alert, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, StatusBar, Alert, Modal, ScrollView, Dimensions, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import { changeIcon, getIcon } from 'react-native-change-icon';
+
+const { width } = Dimensions.get('window');
 
 export default function Home({ navigation }) {
   const [dados, setDados] = useState([]);
-  const [nomeUsuario, setNomeUsuario] = useState('Cabra');
+  const [nomeUsuario, setNomeUsuario] = useState('Campeão');
   
   const [financeiro, setFinanceiro] = useState({
     totalGanhos: 0,
@@ -16,6 +19,18 @@ export default function Home({ navigation }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [itemSelecionado, setItemSelecionado] = useState(null);
   const [menuAddAberto, setMenuAddAberto] = useState(false);
+
+  // --- ÍCONE DINÂMICO ---
+  const gerenciarIconeApp = async (temAtraso) => {
+    try {
+      const iconeAtual = await getIcon();
+      if (temAtraso && iconeAtual !== 'MainActivityPerigo') {
+        await changeIcon('MainActivityPerigo');
+      } else if (!temAtraso && iconeAtual !== 'MainActivityDefault') {
+        await changeIcon('MainActivityDefault');
+      }
+    } catch (e) { }
+  };
 
   const formatarMoeda = (valor) => {
     return 'R$ ' + valor.toFixed(2).replace('.', ',').replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.');
@@ -32,18 +47,16 @@ export default function Home({ navigation }) {
       const ganhosJson = await AsyncStorage.getItem('@pacelo_ganhos');
       const listaGanhos = ganhosJson ? JSON.parse(ganhosJson) : [];
 
-      // --- AUTOMAÇÃO ---
-      const { dividasAtualizadas, pagouAlgo } = verificarAutomacao(listaDividas);
+      const { dividasAtualizadas, pagouAlgo, temAtrasoGeral } = verificarAutomacao(listaDividas);
+      
       if (pagouAlgo) {
         listaDividas = dividasAtualizadas;
         await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaDividas));
-        Alert.alert("🤖 Pacelo Automático", "Algumas contas vencidas foram debitadas automaticamente.");
       }
 
-      // --- FILTRO DE ARQUIVADOS (NOVO) ---
-      // Só mostra na tela e conta no saldo o que NÃO estiver arquivado
-      const listaAtiva = listaDividas.filter(item => !item.arquivado);
+      gerenciarIconeApp(temAtrasoGeral);
 
+      const listaAtiva = listaDividas.filter(item => !item.arquivado);
       setDados(listaAtiva);
       calcularFluxoCaixa(listaAtiva, listaGanhos);
 
@@ -54,51 +67,16 @@ export default function Home({ navigation }) {
 
   useFocusEffect(useCallback(() => { carregarDados(); }, []));
 
-  // --- FUNÇÕES DE ARQUIVAMENTO (NOVO) ---
-  const confirmarArquivamento = (item) => {
-    Alert.alert(
-      "Ignorar Compra?",
-      `Deseja arquivar "${item.nome}"? Ela vai sumir da sua lista e do cálculo de saldo, mas não será apagada do banco.`,
-      [
-        { text: "Cancelar", style: "cancel" },
-        { 
-          text: "Sim, Arquivar", 
-          onPress: () => arquivarItem(item.id),
-          style: 'destructive'
-        }
-      ]
-    );
-  };
-
-  const arquivarItem = async (id) => {
-    try {
-      const dividasJson = await AsyncStorage.getItem('@pacelo_db');
-      let lista = dividasJson ? JSON.parse(dividasJson) : [];
-
-      // Encontra o item e marca como arquivado
-      const novaLista = lista.map(item => {
-        if (item.id === id) {
-          return { ...item, arquivado: true };
-        }
-        return item;
-      });
-
-      await AsyncStorage.setItem('@pacelo_db', JSON.stringify(novaLista));
-      carregarDados(); // Recarrega a tela (o item vai sumir)
-      
-    } catch (e) {
-      Alert.alert("Erro", "Não foi possível arquivar.");
-    }
-  };
-  // --------------------------------------
-
   const verificarAutomacao = (dividas) => {
     let pagouAlgo = false;
+    let temAtrasoGeral = false;
     const hoje = new Date();
     hoje.setHours(0,0,0,0); 
 
     dividas.forEach(item => {
-        // Se estiver arquivado, o robô ignora também
+        const temVencidaNesseItem = item.parcelas.some(p => !p.pago && new Date(p.vencimento) < hoje);
+        if (temVencidaNesseItem) temAtrasoGeral = true;
+
         if (item.autoPay && !item.arquivado) { 
             item.parcelas.forEach(p => {
                 const dataVenc = new Date(p.vencimento);
@@ -110,7 +88,7 @@ export default function Home({ navigation }) {
         }
     });
 
-    return { dividasAtualizadas: dividas, pagouAlgo };
+    return { dividasAtualizadas: dividas, pagouAlgo, temAtrasoGeral };
   };
 
   const calcularFluxoCaixa = (dividas, ganhos) => {
@@ -119,16 +97,12 @@ export default function Home({ navigation }) {
     let totalEntradas = 0;
     ganhos.forEach(item => {
         item.parcelas.forEach(p => {
-            const dataRecebimento = new Date(p.vencimento);
-            if (dataRecebimento <= hoje) {
-                totalEntradas += p.valor;
-            }
+            if (new Date(p.vencimento) <= hoje) totalEntradas += p.valor;
         });
     });
 
     let totalSaidas = 0;
     dividas.forEach(item => {
-      // Itens arquivados já foram filtrados antes de chegar aqui
       const valorPagoNessaDivida = item.parcelas
         .filter(p => p.pago)
         .reduce((acc, p) => acc + p.valor, 0);
@@ -142,38 +116,53 @@ export default function Home({ navigation }) {
     });
   };
 
-  const pagarProximaParcela = async (itemIndex) => {
-    // Atenção: 'dados' aqui já é a lista filtrada (sem arquivados)
-    // Precisamos achar o item no banco original pelo ID para salvar corretamente
-    const itemTela = dados[itemIndex];
+  const confirmarArquivamento = (item) => {
+    Alert.alert(
+      "Arquivar?", 
+      `Ocultar "${item.nome}" da lista?`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        { text: "Arquivar", onPress: () => arquivarItem(item.id), style: 'destructive' }
+      ]
+    );
+  };
 
+  const arquivarItem = async (id) => {
+    try {
+      const dividasJson = await AsyncStorage.getItem('@pacelo_db');
+      let lista = dividasJson ? JSON.parse(dividasJson) : [];
+      const novaLista = lista.map(item => item.id === id ? { ...item, arquivado: true } : item);
+      await AsyncStorage.setItem('@pacelo_db', JSON.stringify(novaLista));
+      carregarDados();
+    } catch (e) {}
+  };
+
+  const pagarProximaParcela = async (itemIndex) => {
+    const itemTela = dados[itemIndex];
     const dividasJson = await AsyncStorage.getItem('@pacelo_db');
     let listaCompleta = dividasJson ? JSON.parse(dividasJson) : [];
-    
-    // Acha o índice real no banco completo
     const indexReal = listaCompleta.findIndex(i => i.id === itemTela.id);
     if (indexReal === -1) return;
 
     const item = listaCompleta[indexReal];
     const parcelaIndex = item.parcelas.findIndex(p => !p.pago);
-
     if (parcelaIndex === -1) return;
 
-    const valorDaParcela = item.parcelas[parcelaIndex].valor;
-
-    if (financeiro.saldoAtual < valorDaParcela) {
-        Alert.alert("Saldo Insuficiente", "O caixa tá zerado! Cadastre um ganho ou espere cair o salário.");
+    if (financeiro.saldoAtual < item.parcelas[parcelaIndex].valor) {
+        Alert.alert("Saldo Insuficiente", "Sem caixa para pagar isso agora.");
         return;
     }
 
     item.parcelas[parcelaIndex].pago = true;
-    listaCompleta[indexReal] = item; // Atualiza na lista completa
-
+    listaCompleta[indexReal] = item;
     await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaCompleta));
-    
     carregarDados();
-    
     if (itemSelecionado && itemSelecionado.id === item.id) setItemSelecionado(item);
+  };
+
+  const formatarData = (isoDate) => {
+    const data = new Date(isoDate);
+    return `${data.getDate().toString().padStart(2, '0')}/${(data.getMonth()+1).toString().padStart(2, '0')}`;
   };
 
   const abrirDetalhes = (item) => {
@@ -186,86 +175,91 @@ export default function Home({ navigation }) {
     navigation.navigate('Cadastro', { tipoOperacao: tipo });
   };
 
-  const formatarData = (isoDate) => {
-    const data = new Date(isoDate);
-    return `${data.getDate().toString().padStart(2, '0')}/${(data.getMonth()+1).toString().padStart(2, '0')}`;
-  };
-
+  // --- RENDERIZAÇÃO ---
   const renderItem = ({ item, index }) => {
     const proxima = item.parcelas.find(p => !p.pago);
     
+    // Cálculos
     const pagasQtd = item.parcelas.filter(p => p.pago).length;
     const totalQtd = item.parcelas.length;
-    const restantesQtd = totalQtd - pagasQtd;
-    
-    const valorPagoAcumulado = item.parcelas.filter(p => p.pago).reduce((acc, p) => acc + p.valor, 0);
-    const valorRestantePagar = item.valorTotal - valorPagoAcumulado;
-    
     const progresso = pagasQtd / totalQtd;
+    
+    // Valores
+    const valorPagoAcumulado = item.parcelas.filter(p => p.pago).reduce((acc, p) => acc + p.valor, 0);
+    const valorRestante = item.valorTotal - valorPagoAcumulado;
+
+    // Atraso?
+    const hoje = new Date();
+    hoje.setHours(0,0,0,0);
+    const estaAtrasada = proxima && new Date(proxima.vencimento) < hoje;
 
     return (
       <TouchableOpacity 
-        style={styles.card} 
+        // AQUI ESTÁ A LÓGICA DO CARD VERMELHO
+        style={[styles.card, estaAtrasada && styles.cardAtrasado]} 
         activeOpacity={0.9} 
         onPress={() => abrirDetalhes(item)}
-        onLongPress={() => confirmarArquivamento(item)} // <--- A MÁGICA AQUI
-        delayLongPress={800} // Precisa segurar por 0.8s
+        onLongPress={() => confirmarArquivamento(item)}
+        delayLongPress={600}
       >
-        
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitulo}>{item.nome}</Text>
-          {item.autoPay && <Text style={styles.badgeAuto}>Automático ⚡</Text>}
-        </View>
-        
-        <View style={styles.barraFundo}>
-          <View style={[styles.barraPreenchida, { width: `${progresso * 100}%` }]} />
+          <View style={{flexDirection:'row', alignItems:'center', flex: 1}}>
+             <View style={[styles.iconPlaceholder, {backgroundColor: estaAtrasada ? '#fee2e2' : '#f1f5f9'}]}>
+                <Text style={{fontSize: 18}}>{estaAtrasada ? '🚨' : '🛍️'}</Text>
+             </View>
+             <View style={{marginLeft: 12, flex: 1}}>
+                <Text style={styles.cardTitulo} numberOfLines={1}>{item.nome}</Text>
+                <Text style={styles.cardSubtitulo}>
+                    {pagasQtd}/{totalQtd} parcelas
+                </Text>
+             </View>
+          </View>
+          
+          <View style={{alignItems: 'flex-end'}}>
+             <Text style={styles.valorTotalCard}>{formatarMoeda(item.valorTotal)}</Text>
+             {item.autoPay && <View style={styles.badgeAuto}><Text style={styles.txtBadge}>AUTO</Text></View>}
+          </View>
         </View>
 
-        <View style={styles.statsContainer}>
-            <View style={styles.colunaStat}>
-                <Text style={styles.labelStat}>Total</Text>
-                <Text style={styles.valorStat}>{formatarMoeda(item.valorTotal)}</Text>
+        {/* --- ESTATÍSTICAS INTERNAS (RESTANTE A PAGAR AQUI) --- */}
+        <View style={[styles.statsRow, estaAtrasada ? {backgroundColor: '#fecaca'} : {}]}>
+            <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Pago</Text>
+                <Text style={[styles.statValor, {color: '#16a34a'}]}>{formatarMoeda(valorPagoAcumulado)}</Text>
             </View>
-            <View style={styles.separadorVertical} />
-            <View style={styles.colunaStat}>
-                <Text style={styles.labelStat}>Pago</Text>
-                <Text style={[styles.valorStat, {color: '#22c55e'}]}>{formatarMoeda(valorPagoAcumulado)}</Text>
-            </View>
-            <View style={styles.separadorVertical} />
-            <View style={styles.colunaStat}>
-                <Text style={styles.labelStat}>Falta</Text>
-                <Text style={[styles.valorStat, {color: '#ef4444'}]}>{formatarMoeda(valorRestantePagar)}</Text>
+            <View style={styles.statDivisor}/>
+            <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Restante</Text>
+                <Text style={[styles.statValor, {color: estaAtrasada ? '#dc2626' : '#64748b'}]}>
+                    {formatarMoeda(valorRestante)}
+                </Text>
             </View>
         </View>
-        
-        <View style={styles.infoParcelasRow}>
-            <Text style={styles.txtInfoParcelas}>
-                {pagasQtd} Pagas • Restam {restantesQtd}
-            </Text>
-            <Text style={styles.txtInfoParcelasTotal}>
-                {pagasQtd}/{totalQtd}
-            </Text>
+
+        {/* Barra de Progresso */}
+        <View style={styles.barraFundo}>
+          <View style={[styles.barraPreenchida, { width: `${progresso * 100}%`, backgroundColor: estaAtrasada ? '#ef4444' : '#22c55e' }]} />
         </View>
 
         {proxima ? (
-          <View style={styles.areaAcao}>
-            <View>
-              <Text style={styles.labelVencimento}>Vence {formatarData(proxima.vencimento)}</Text>
-              <Text style={styles.valorParcela}>{formatarMoeda(proxima.valor)}</Text>
-            </View>
-            
-            {item.autoPay ? (
-                <View style={styles.boxAuto}>
-                    <Text style={styles.txtAuto}>Débito Auto.</Text>
-                </View>
-            ) : (
-                <TouchableOpacity style={styles.btnPagar} onPress={() => pagarProximaParcela(index)}>
+          <View style={styles.footerCard}>
+             <View>
+                <Text style={[styles.labelVencimento, {color: estaAtrasada ? '#ef4444' : '#64748b'}]}>
+                    {estaAtrasada ? `VENCEU ${formatarData(proxima.vencimento)}` : `Vence ${formatarData(proxima.vencimento)}`}
+                </Text>
+                <Text style={styles.valorParcelaDestaque}>{formatarMoeda(proxima.valor)}</Text>
+             </View>
+
+             {!item.autoPay && (
+                 <TouchableOpacity style={[styles.btnPagar, estaAtrasada && styles.btnPagarAtrasado]} onPress={() => pagarProximaParcela(index)}>
                     <Text style={styles.txtBtnPagar}>PAGAR</Text>
-                </TouchableOpacity>
-            )}
+                 </TouchableOpacity>
+             )}
           </View>
         ) : (
-          <View style={styles.quitado}><Text style={styles.txtQuitado}>DÍVIDA QUITADA 🎉</Text></View>
+          <View style={styles.quitadoContainer}>
+            <Text style={styles.txtQuitado}>✅ CONTA PAGA</Text>
+          </View>
         )}
       </TouchableOpacity>
     );
@@ -274,150 +268,216 @@ export default function Home({ navigation }) {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
-      <View style={styles.header}>
-        <View>
-            <Text style={styles.saudacao}>Fala, {nomeUsuario}!</Text>
-            <Text style={styles.appNome}>PACELO</Text>
+      
+      <View style={styles.painelPrincipal}>
+        <View style={styles.headerTop}>
+            <View>
+                <Text style={styles.saudacao}>Olá, {nomeUsuario}</Text>
+                <Text style={styles.dataHoje}>{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric' })}</Text>
+            </View>
+            <TouchableOpacity style={styles.btnPerfil} onPress={() => navigation.navigate('Perfil')}>
+                <Text style={{fontSize:18}}>👤</Text>
+            </TouchableOpacity>
+        </View>
+
+        <View style={styles.saldoContainer}>
+            <Text style={styles.labelSaldo}>Saldo Disponível</Text>
+            <Text style={styles.valorSaldo}>{formatarMoeda(financeiro.saldoAtual)}</Text>
+        </View>
+
+        <View style={styles.resumoRow}>
+            <View style={styles.resumoItem}>
+                <View style={[styles.dot, {backgroundColor: '#4ade80'}]}/>
+                <Text style={styles.resumoLabel}>Entradas</Text>
+                <Text style={styles.resumoValor}>{formatarMoeda(financeiro.totalGanhos)}</Text>
+            </View>
+            <View style={styles.resumoDivisor}/>
+            <View style={styles.resumoItem}>
+                <View style={[styles.dot, {backgroundColor: '#f87171'}]}/>
+                <Text style={styles.resumoLabel}>Saídas</Text>
+                <Text style={styles.resumoValor}>{formatarMoeda(financeiro.totalPago)}</Text>
+            </View>
         </View>
       </View>
 
-      <View style={styles.painelFinanceiro}>
-        <View style={styles.painelLinha}>
-            <Text style={styles.painelLabel}>Entradas (Até Hoje)</Text>
-            <Text style={styles.painelValorVerde}>{formatarMoeda(financeiro.totalGanhos)}</Text>
-        </View>
-        <View style={styles.painelLinha}>
-            <Text style={styles.painelLabel}>Saídas Realizadas</Text>
-            <Text style={styles.painelValorVermelho}>- {formatarMoeda(financeiro.totalPago)}</Text>
-        </View>
-        <View style={styles.divisor} />
-        <View style={styles.painelLinha}>
-            <Text style={styles.saldoLabel}>SALDO ATUAL</Text>
-            <Text style={[styles.saldoValor, { color: financeiro.saldoAtual >= 0 ? '#22c55e' : '#ef4444' }]}>
-                {formatarMoeda(financeiro.saldoAtual)}
-            </Text>
-        </View>
+      <View style={styles.bodyContainer}>
+          <Text style={styles.tituloSecao}>Próximos Pagamentos</Text>
+          
+          <FlatList 
+            data={dados}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            contentContainerStyle={{ paddingBottom: 100 }}
+            showsVerticalScrollIndicator={false}
+          />
       </View>
-
-      <Text style={styles.tituloLista}>Minhas Dívidas</Text>
-
-      <FlatList 
-        data={dados}
-        keyExtractor={item => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={{ padding: 20, paddingTop: 0, paddingBottom: 100 }}
-      />
 
       {menuAddAberto && (
-        <View style={styles.menuAddContainer}>
-          <TouchableOpacity style={[styles.menuOpcao, {backgroundColor: '#22c55e'}]} onPress={() => irParaCadastro('ganho')}>
-            <Text style={styles.menuTexto}>Ganho</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.menuOpcao, {backgroundColor: '#ef4444'}]} onPress={() => irParaCadastro('despesa')}>
-            <Text style={styles.menuTexto}>Dívida</Text>
-          </TouchableOpacity>
-        </View>
+        <>
+            <TouchableOpacity 
+                style={styles.backdropMenu} 
+                activeOpacity={1} 
+                onPress={() => setMenuAddAberto(false)} 
+            />
+            <View style={styles.menuAddContainer}>
+                <TouchableOpacity style={styles.menuOpcao} onPress={() => irParaCadastro('ganho')}>
+                    <Text style={styles.menuIcone}>💰</Text>
+                    <Text style={styles.menuTexto}>Entrada</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.menuOpcao} onPress={() => irParaCadastro('despesa')}>
+                    <Text style={styles.menuIcone}>💸</Text>
+                    <Text style={styles.menuTexto}>Dívida</Text>
+                </TouchableOpacity>
+            </View>
+        </>
       )}
 
       <TouchableOpacity 
-        style={[styles.fab, menuAddAberto ? {backgroundColor: '#475569'} : {}]}
+        style={[styles.fab, menuAddAberto && {transform: [{rotate: '45deg'}]}]}
         onPress={() => setMenuAddAberto(!menuAddAberto)}
+        activeOpacity={0.8}
       >
-        <Text style={styles.fabTexto}>{menuAddAberto ? 'X' : '+'}</Text>
+        <Text style={styles.fabTexto}>+</Text>
       </TouchableOpacity>
 
-      <Modal animationType="slide" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+      <Modal animationType="fade" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModalVisible(false)}>
+            <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
+                <View style={styles.modalDragIndicator} />
                 <View style={styles.modalHeader}>
                     <Text style={styles.modalTitulo}>{itemSelecionado?.nome}</Text>
-                    <TouchableOpacity onPress={() => setModalVisible(false)}><Text style={styles.modalFechar}>X</Text></TouchableOpacity>
+                    <Text style={styles.modalTotal}>{itemSelecionado && formatarMoeda(itemSelecionado.valorTotal)}</Text>
                 </View>
-                <View style={styles.resumoModal}>
-                     <Text style={styles.txtResumoModal}>Total: {itemSelecionado && formatarMoeda(itemSelecionado.valorTotal)}</Text>
-                </View>
+                
                 <ScrollView style={styles.modalLista}>
                     {itemSelecionado?.parcelas.map((p, index) => (
                         <View key={index} style={[styles.linhaParcela, p.pago ? styles.linhaPaga : null]}>
-                            <Text style={styles.txtNumero}>#{p.numero}</Text>
-                            <Text style={styles.txtData}>{formatarData(p.vencimento)}</Text>
-                            <Text style={[styles.txtValor, p.pago && styles.txtValorPago]}>{formatarMoeda(p.valor)}</Text>
+                            <View style={{flexDirection:'row', alignItems:'center'}}>
+                                <View style={[styles.bolinhaStatus, {backgroundColor: p.pago ? '#22c55e' : '#e2e8f0'}]}/>
+                                <Text style={styles.txtNumero}>Parcela {p.numero}</Text>
+                            </View>
+                            <View style={{alignItems:'flex-end'}}>
+                                <Text style={styles.txtValor}>{formatarMoeda(p.valor)}</Text>
+                                <Text style={styles.txtData}>{formatarData(p.vencimento)}</Text>
+                            </View>
                         </View>
                     ))}
                 </ScrollView>
-            </View>
-        </View>
+            </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f1f5f9' },
-  header: { backgroundColor: '#fff', padding: 20, elevation: 2 },
-  appNome: { fontSize: 20, fontWeight: '900', color: '#0f172a' },
-  saudacao: { fontSize: 14, color: '#64748b', fontWeight: '600' },
-  
-  painelFinanceiro: {
-    backgroundColor: '#0f172a', margin: 20, borderRadius: 16, padding: 20, elevation: 8,
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+
+  painelPrincipal: {
+    backgroundColor: '#0f172a',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 20 : 60, // CORREÇÃO DO NOTCH
+    paddingHorizontal: 24,
+    paddingBottom: 30,
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+    elevation: 10,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    zIndex: 1,
   },
-  painelLinha: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
-  painelLabel: { color: '#94a3b8', fontSize: 14 },
-  painelValorVerde: { color: '#4ade80', fontWeight: 'bold', fontSize: 14 },
-  painelValorVermelho: { color: '#f87171', fontWeight: 'bold', fontSize: 14 },
-  divisor: { height: 1, backgroundColor: '#334155', marginVertical: 10 },
-  saldoLabel: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  saldoValor: { fontSize: 24, fontWeight: 'bold' },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25 },
+  saudacao: { color: '#94a3b8', fontSize: 16, fontWeight: '500' },
+  dataHoje: { color: '#fff', fontSize: 14, fontWeight: 'bold', textTransform: 'capitalize' },
+  btnPerfil: { backgroundColor: 'rgba(255,255,255,0.1)', padding: 10, borderRadius: 12 },
 
-  tituloLista: { marginLeft: 20, marginBottom: 10, fontSize: 18, fontWeight: 'bold', color: '#334155' },
+  saldoContainer: { alignItems: 'center', marginBottom: 25 },
+  labelSaldo: { color: '#cbd5e1', fontSize: 14, marginBottom: 5 },
+  valorSaldo: { color: '#fff', fontSize: 36, fontWeight: '800' },
 
-  card: { backgroundColor: '#fff', borderRadius: 12, padding: 15, marginBottom: 15, elevation: 2 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
-  cardTitulo: { fontSize: 18, fontWeight: 'bold', color: '#1e293b' },
-  badgeAuto: { fontSize: 10, color: '#eab308', fontWeight: 'bold' },
+  resumoRow: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 15 },
+  resumoItem: { flex: 1, alignItems: 'center' },
+  resumoDivisor: { width: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
+  resumoLabel: { color: '#94a3b8', fontSize: 12, marginTop: 4 },
+  resumoValor: { color: '#fff', fontWeight: 'bold', fontSize: 15, marginTop: 2 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+
+  bodyContainer: { flex: 1, paddingHorizontal: 20, marginTop: 20 },
+  tituloSecao: { fontSize: 18, fontWeight: 'bold', color: '#1e293b', marginBottom: 15 },
+
+  // --- CARDS ---
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    elevation: 3,
+    shadowColor: '#64748b',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    borderWidth: 1,
+    borderColor: '#f1f5f9'
+  },
   
-  barraFundo: { height: 4, backgroundColor: '#f1f5f9', borderRadius: 3, marginVertical: 10, overflow: 'hidden' },
-  barraPreenchida: { height: '100%', backgroundColor: '#22c55e' },
+  // ESTILO QUANDO ATRASADO (Borda Vermelha e Fundo Leve)
+  cardAtrasado: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    backgroundColor: '#fef2f2' // Fundo avermelhado bem suave
+  },
+
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 15 },
+  iconPlaceholder: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  cardTitulo: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
+  cardSubtitulo: { fontSize: 12, color: '#94a3b8', marginTop: 2 },
+  valorTotalCard: { fontSize: 14, fontWeight: 'bold', color: '#334155' },
   
-  statsContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#f8fafc', padding: 10, borderRadius: 8, marginBottom: 10 },
-  colunaStat: { alignItems: 'center', flex: 1 },
-  separadorVertical: { width: 1, backgroundColor: '#cbd5e1' },
-  labelStat: { fontSize: 10, color: '#64748b', textTransform: 'uppercase', marginBottom: 2 },
-  valorStat: { fontSize: 12, fontWeight: 'bold', color: '#334155' },
+  badgeAuto: { backgroundColor: '#fef3c7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginTop: 4, alignSelf: 'flex-end' },
+  txtBadge: { color: '#d97706', fontSize: 10, fontWeight: 'bold' },
 
-  infoParcelasRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  txtInfoParcelas: { fontSize: 12, color: '#64748b' },
-  txtInfoParcelasTotal: { fontSize: 12, fontWeight: 'bold', color: '#334155' },
+  // --- BLOCO DE ESTATÍSTICAS INTERNO ---
+  statsRow: { flexDirection: 'row', backgroundColor: '#f8fafc', borderRadius: 12, padding: 10, marginBottom: 12 },
+  statItem: { flex: 1, alignItems: 'center' },
+  statDivisor: { width: 1, backgroundColor: '#e2e8f0' },
+  statLabel: { fontSize: 11, color: '#64748b', marginBottom: 2, textTransform: 'uppercase' },
+  statValor: { fontSize: 13, fontWeight: 'bold' },
 
-  areaAcao: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 10 },
-  labelVencimento: { fontSize: 12, color: '#ef4444', fontWeight: 'bold' },
-  valorParcela: { fontSize: 18, color: '#1e293b', fontWeight: 'bold' },
-  btnPagar: { backgroundColor: '#0f172a', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 },
+  barraFundo: { height: 6, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 3, marginBottom: 15 },
+  barraPreenchida: { height: '100%', borderRadius: 3 },
+
+  footerCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  labelVencimento: { fontSize: 12, fontWeight: '600', marginBottom: 2 },
+  valorParcelaDestaque: { fontSize: 20, fontWeight: 'bold', color: '#0f172a' },
+  
+  btnPagar: { backgroundColor: '#0f172a', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
+  btnPagarAtrasado: { backgroundColor: '#ef4444' },
   txtBtnPagar: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
   
-  boxAuto: { backgroundColor: '#fef9c3', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
-  txtAuto: { color: '#854d0e', fontWeight: 'bold', fontSize: 12 },
+  quitadoContainer: { backgroundColor: '#f0fdf4', padding: 10, borderRadius: 8, alignItems: 'center' },
+  txtQuitado: { color: '#15803d', fontWeight: 'bold', fontSize: 12 },
 
-  quitado: { alignItems: 'center', paddingVertical: 10, backgroundColor: '#dcfce7', borderRadius: 8 },
-  txtQuitado: { color: '#166534', fontWeight: 'bold' },
+  fab: { position: 'absolute', bottom: 30, right: 20, width: 60, height: 60, borderRadius: 30, backgroundColor: '#2563eb', justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor:'#2563eb', shadowOpacity: 0.4, shadowRadius: 10 },
+  fabTexto: { color: '#fff', fontSize: 32, marginTop: -4, fontWeight: '300' },
   
-  fab: { position: 'absolute', bottom: 30, right: 20, width: 60, height: 60, borderRadius: 30, backgroundColor: '#2563eb', justifyContent: 'center', alignItems: 'center', elevation: 5 },
-  fabTexto: { color: '#fff', fontSize: 30, marginTop: -3 },
+  backdropMenu: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(255,255,255,0.8)' },
   menuAddContainer: { position: 'absolute', bottom: 100, right: 20, alignItems: 'flex-end' },
-  menuOpcao: { flexDirection: 'row', padding: 10, borderRadius: 8, marginBottom: 10, elevation: 5 },
-  menuTexto: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  menuOpcao: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 12, paddingHorizontal: 20, borderRadius: 50, marginBottom: 12, elevation: 5 },
+  menuIcone: { fontSize: 20, marginRight: 10 },
+  menuTexto: { fontWeight: 'bold', color: '#1e293b' },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#fff', height: '60%', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  modalTitulo: { fontSize: 20, fontWeight: 'bold', color: '#0f172a' },
-  modalFechar: { fontSize: 20, color: '#94a3b8' },
-  resumoModal: { marginBottom: 10 },
-  txtResumoModal: { fontSize: 16, fontWeight: 'bold', color: '#334155' },
-  linhaParcela: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  linhaPaga: { opacity: 0.5 },
-  txtNumero: { fontWeight: 'bold', color: '#334155' },
-  txtData: { color: '#94a3b8' },
-  txtValor: { fontWeight: 'bold', color: '#ef4444' },
-  txtValorPago: { color: '#22c55e', textDecorationLine: 'line-through' }
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.6)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: '#fff', height: '65%', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25 },
+  modalDragIndicator: { width: 40, height: 5, backgroundColor: '#e2e8f0', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  modalTitulo: { fontSize: 22, fontWeight: 'bold', color: '#0f172a' },
+  modalTotal: { fontSize: 18, color: '#64748b' },
+  
+  linhaParcela: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#f8fafc' },
+  linhaPaga: { opacity: 0.4 },
+  bolinhaStatus: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
+  txtNumero: { fontWeight: '600', color: '#334155' },
+  txtData: { color: '#94a3b8', fontSize: 12 },
+  txtValor: { fontWeight: 'bold', color: '#1e293b' },
 });
