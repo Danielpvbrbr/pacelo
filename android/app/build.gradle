@@ -1,9 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
-// --- ADICIONADO: Plugin do Google Services para Firebase ---
-apply plugin: "com.google.gms.google-services"
-// ----------------------------------------------------------
+
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -88,6 +86,7 @@ android {
         versionCode 1
         versionName "1.0"
     }
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -95,15 +94,30 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (project.hasProperty('MYAPP_UPLOAD_STORE_FILE')) {
+                storeFile file(MYAPP_UPLOAD_STORE_FILE)
+                storePassword MYAPP_UPLOAD_STORE_PASSWORD
+                keyAlias MYAPP_UPLOAD_KEY_ALIAS
+                keyPassword MYAPP_UPLOAD_KEY_PASSWORD
+            } else {
+                storeFile file('my-upload-key.keystore')
+                storePassword '18011998' 
+                keyAlias 'my-key-alias'
+                keyPassword '18011998' 
+            }
+        }
+        // -------------------------------------------------------
     }
+
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // --- MUDE ESTA LINHA (DE debug PARA release) ---
+            signingConfig signingConfigs.release
+            // -----------------------------------------------
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
@@ -113,10 +127,6 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-
-    // --- ADICIONADO: Firebase BoM (Controlador de versões do Firebase) ---
-    implementation platform('com.google.firebase:firebase-bom:34.7.0')
-    // ---------------------------------------------------------------------
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

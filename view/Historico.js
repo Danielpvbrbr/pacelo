@@ -53,7 +53,7 @@ export default function Historico() {
   // --- APAGAR DO HISTÓRICO (Lixeira) ---
   const confirmarExclusao = (id) => {
     Alert.alert(
-        "Apagar Registro? 🗑️",
+        "Apagar Registro?",
         "Isso remove a conta permanentemente do histórico.",
         [
             { text: "Cancelar", style: "cancel" },
