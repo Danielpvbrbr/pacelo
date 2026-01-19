@@ -19,7 +19,6 @@ export default function Cadastro({ navigation, route }) {
 
   const corTema = isDespesa ? '#ef4444' : '#22c55e';
 
-  // --- MÁSCARAS ---
   const handleValorChange = (texto) => {
     let v = texto.replace(/\D/g, '');
     v = (Number(v) / 100).toFixed(2) + '';
@@ -39,13 +38,10 @@ export default function Cadastro({ navigation, route }) {
     setDataCompra(v);
   };
 
-  // No arquivo view/Cadastro.jsx
-
   const agendarNotificacoesLocais = async (registro) => {
     if (!isDespesa) return;
 
     try {
-      // 1. Puxar o nome do usuário do banco antes de agendar
       let nomeUsuario = 'Campeão'; // Padrão caso não tenha nome
       const perfilJson = await AsyncStorage.getItem('@pacelo_perfil');
       if (perfilJson) {
@@ -109,7 +105,6 @@ export default function Cadastro({ navigation, route }) {
     }
   };
 
-  // --- SALVAR NO BANCO ---
   const finalizarSalvamento = async (registroFinal) => {
     try {
       const keyDb = isDespesa ? '@pacelo_db' : '@pacelo_ganhos';
@@ -119,7 +114,7 @@ export default function Cadastro({ navigation, route }) {
 
       await AsyncStorage.setItem(keyDb, JSON.stringify(novaLista));
 
-      // AGENDA O DESPERTADOR AQUI 🔔
+      // AGENDA O DESPERTADOR AQUI 
       await agendarNotificacoesLocais(registroFinal);
 
       Alert.alert('Sucesso', isDespesa ? 'Dívida salva e lembretes criados!' : 'Ganho adicionado!');
