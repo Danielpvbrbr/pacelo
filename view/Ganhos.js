@@ -108,7 +108,7 @@ export default function Ganhos({ navigation }) {
         <Text style={styles.valorHeader}>{formatarMoeda(totalGanhos)}</Text>
         
         <View style={styles.resumoBadge}>
-            <Text style={styles.resumoTexto}>🚀 Foguete não tem ré</Text>
+            <Text style={styles.resumoTexto}>Foguete não tem ré</Text>
         </View>
       </View>
 
