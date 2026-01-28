@@ -5,7 +5,7 @@ import { useNavigation } from '@react-navigation/native';
 import { changeIcon } from 'react-native-change-icon';
 import { version } from '../package.json';
 import notifee, { TriggerType, AndroidImportance, AndroidStyle } from '@notifee/react-native';
-
+import { NotificationService } from '../services/NotificationService';
 
 export default function Configuracao() {
   const navigation = useNavigation();
@@ -16,13 +16,15 @@ export default function Configuracao() {
   useEffect(() => {
     carregarPerfil();
   }, []);
-
   const carregarPerfil = async () => {
     try {
       const json = await AsyncStorage.getItem('@pacelo_perfil');
       if (json) {
         const perfil = JSON.parse(json);
         setNome(perfil.nome);
+        // Carrega os estados salvos (usa true como padrão se não existir)
+        setNotificacoes(perfil.notificacoes !== undefined ? perfil.notificacoes : true);
+        setSons(perfil.sons !== undefined ? perfil.sons : true);
       }
     } catch (e) { }
   };
@@ -33,7 +35,9 @@ export default function Configuracao() {
       return;
     }
     try {
-      await AsyncStorage.setItem('@pacelo_perfil', JSON.stringify({ nome }));
+      // Salva o nome mantendo as chaves de notificação e som
+      const perfilCompleto = { nome, notificacoes, sons };
+      await AsyncStorage.setItem('@pacelo_perfil', JSON.stringify(perfilCompleto));
       Alert.alert("Sucesso", "Nome atualizado! 🎉");
     } catch (e) {
       Alert.alert("Erro", "Não foi possível salvar.");
@@ -71,62 +75,50 @@ export default function Configuracao() {
     );
   };
 
-  const testarNotificacaoAgora = async () => {///Acionado ao fica precionado na versao 
+  const salvarPreferencias = async (novaNotif, novoSom) => {
+    try {
+      const perfilAtual = { nome, notificacoes: novaNotif, sons: novoSom };
+      await AsyncStorage.setItem('@pacelo_perfil', JSON.stringify(perfilAtual));
+
+      // Se o usuário desligou a chave geral, limpa os agendamentos pendentes
+      if (!novaNotif) {
+        await NotificationService.cancelarTodas();
+        Alert.alert("Notificações desativadas", "Todos os lembretes pendentes foram removidos.");
+      }
+    } catch (e) { }
+  };
+
+  const testarNotificacaoAgora = async () => {
     // 1. Pedir permissão
     await notifee.requestPermission();
 
-    // 2. Criar canal
-    const channelId = await notifee.createChannel({
-      id: 'teste-rapido',
-      name: 'Canal de Teste',
-      importance: AndroidImportance.HIGH,
-      sound: 'default',
-    });
-
-    // 3. Configurar para daqui a 5 SEGUNDOS
-    const date = new Date(Date.now());
-    date.setSeconds(date.getSeconds() + 5);
-
+    // 2. Configurar para daqui a 3 segundos (mais rápido para teste)
     const trigger = {
       type: TriggerType.TIMESTAMP,
-      timestamp: date.getTime(),
+      timestamp: Date.now() + 3000,
     };
 
-    // 4. Agendar (COM DADOS FAKE PARA TESTE)
-    await notifee.createTriggerNotification(
+    // 3. Agendar via Service (Ele vai checar se 'sons' está ativo ou não)
+    await NotificationService.schedule(
       {
-        title: `<b>Vencimento: Conta de Luz</b>`, // Título Fake
-        body: `Sua parcela 1 vence hoje.`,
-        subtitle: 'Fatura Disponível',
+        title: `<b>Teste do Sistema</b>`,
+        body: `Olá ${nome || 'Campeão'}! Isso é um teste de som e alerta.`,
+        subtitle: 'Configurações',
         android: {
-          channelId,
-          color: '#ffffff',
-
+          color: '#0f172a',
           smallIcon: 'ic_notification',
           largeIcon: 'ic_launcher',
-
           pressAction: { id: 'default' },
-
-          // ESTILO AVANÇADO (BIG TEXT)
           style: {
             type: AndroidStyle.BIGTEXT,
-            // Texto Fake bem bonito
-            text: `Olá \n\nA parcela <b>1</b> de <b>Conta de Luz</b> vence hoje.\n\n Valor: <b>R$ 150,90</b>\n🗓️ Vencimento: Hoje\n\nEvite juros, pague agora!`,
+            text: `Se você ouviu som, a chave <b>Sons</b> está ativada.\n\nSe não ouviu, o app enviou pelo canal silencioso conforme sua configuração! 🔊`,
           },
-
-          // BOTÃO NA NOTIFICAÇÃO
-          actions: [
-            {
-              title: 'Abrir Aplicativo',
-              pressAction: { id: 'default' },
-            }
-          ]
         },
       },
       trigger,
     );
 
-    Alert.alert("Agendado!", "Bloqueie a tela e aguarde 5 segundos...");
+    Alert.alert("Teste Agendado", "Aguarde 3 segundos...");
   };
 
   return (
@@ -156,6 +148,7 @@ export default function Configuracao() {
               value={nome}
               onChangeText={setNome}
               placeholder="Seu nome"
+              placeholderTextColor="#64748b"
             />
             <TouchableOpacity style={styles.btnSalvar} onPress={salvarNome}>
               <Text style={styles.txtSalvar}>Salvar</Text>
@@ -176,7 +169,10 @@ export default function Configuracao() {
             </View>
             <Switch
               value={notificacoes}
-              onValueChange={setNotificacoes}
+              onValueChange={(val) => {
+                setNotificacoes(val);
+                salvarPreferencias(val, sons);
+              }}
               trackColor={{ false: "#767577", true: "#0f172a" }}
               thumbColor={notificacoes ? "#fff" : "#f4f3f4"}
             />
@@ -193,7 +189,10 @@ export default function Configuracao() {
             </View>
             <Switch
               value={sons}
-              onValueChange={setSons}
+              onValueChange={(val) => {
+                setSons(val);
+                salvarPreferencias(notificacoes, val);
+              }}
               trackColor={{ false: "#767577", true: "#0f172a" }}
               thumbColor={sons ? "#fff" : "#f4f3f4"}
             />

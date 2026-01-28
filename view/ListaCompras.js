@@ -10,7 +10,7 @@ import { Dimensions } from 'react-native';
 import { BarChart } from 'react-native-chart-kit';
 import IconeWhatsApp from "./utils/IconeWhatsApp"
 const screenWidth = Dimensions.get('window').width;
-
+import { NotificationService } from '../services/NotificationService';
 
 export default function ListaCompras() {
   const [itemInput, setItemInput] = useState('');
@@ -195,16 +195,8 @@ export default function ListaCompras() {
 
   const agendarNotificacaoInteligente = async () => {
     try {
-      // 1. Permissões (Igual ao seu Cadastro)
+      // 1. Permissões
       await notifee.requestPermission();
-
-      // 2. Canal (Igual ao seu Cadastro)
-      const channelId = await notifee.createChannel({
-        id: 'mercado-smart', // ID único para o mercado
-        name: 'Lembrete de Mercado',
-        importance: AndroidImportance.HIGH,
-        sound: 'default',
-      });
 
       const afinidade = descobrirAfinidade();
       let titulo = "🛒 Hora do Mercado?";
@@ -223,25 +215,24 @@ export default function ListaCompras() {
         }
       }
 
-      // 3. Configuração do Horário (Exatamente às 08:00 de amanhã)
       const dataNotificacao = new Date();
       dataNotificacao.setDate(dataNotificacao.getDate() + 1); // Amanhã
-      dataNotificacao.setHours(8, 0, 0, 0); // Às 08:00:00
+      dataNotificacao.setHours(8, 0, 0, 0); 
 
-      // 4. Trigger (Padrão que funciona no seu Cadastro)
       const trigger = {
         type: TriggerType.TIMESTAMP,
-        timestamp: dataNotificacao.getTime(), // Milissegundos exatos
-        alarmManager: true, // ESSENCIAL para Android agendar fora do app
+        timestamp: dataNotificacao.getTime(),
+        alarmManager: true, 
       };
 
-      await notifee.createTriggerNotification(
+      // USANDO O SERVICE: Ele decide se toca som e se a notificação deve sair
+      await NotificationService.schedule(
         {
           title: `<b>${titulo}</b>`,
           body: corpo,
           android: {
-            channelId,
-            smallIcon: 'ic_notification', // Use o mesmo ícone do seu Cadastro
+            // O channelId será definido automaticamente pelo Service
+            smallIcon: 'ic_notification', 
             largeIcon: 'ic_launcher',
             pressAction: { id: 'default' },
             color: '#0f172a',
@@ -250,7 +241,7 @@ export default function ListaCompras() {
         trigger,
       );
 
-      console.log("Notificação de mercado agendada para:", dataNotificacao.toLocaleString());
+      console.log("Mercado agendado via Service para:", dataNotificacao.toLocaleString());
     } catch (e) {
       console.log("Erro ao agendar mercado:", e);
     }
@@ -319,44 +310,37 @@ export default function ListaCompras() {
   };
 
   // FUNÇÃO DE TESTE (Dispara na hora ao segurar o título "Mercado")
-  const testarNotificacao = async () => {
+const testarNotificacao = async () => {
     try {
       await notifee.requestPermission();
-
-      const channelId = await notifee.createChannel({
-        id: 'mercado-smart',
-        name: 'Lembrete de Mercado',
-        importance: AndroidImportance.HIGH,
-      });
-
       const afinidade = descobrirAfinidade();
+      
       let titulo = "🛒 Teste de Inteligência";
       let corpo = "Ainda não tenho dados, mas o sistema está ativo!";
 
       if (afinidade) {
         titulo = `<b>Já tem ${afinidade.sugestao}?</b>`;
         corpo = `Notei que você costuma levar com ${afinidade.item}.`;
-      } else {
-        const produtos = Object.keys(historicoPrecos);
-        if (produtos.length > 0) {
-          const p = produtos[Math.floor(Math.random() * produtos.length)];
-          titulo = `<b>O preço do ${p} baixou?</b>`;
-          corpo = `Último preço: R$ ${historicoPrecos[p].toFixed(2).replace('.', ',')}.`;
-        }
       }
 
-      // displayNotification dispara IMEDIATAMENTE
-      await notifee.displayNotification({
+      // IMPORTANTE: Para o teste ser IMEDIATO mas respeitar o som, 
+      // usamos um trigger de 1 segundo com o Service
+      const triggerTeste = {
+        type: TriggerType.TIMESTAMP,
+        timestamp: Date.now() + 1000, 
+      };
+
+      await NotificationService.schedule({
         title: titulo,
         body: corpo,
         android: {
-          channelId,
-          smallIcon: 'ic_notification', // Mesmo ícone que funciona no seu outro código
+          smallIcon: 'ic_notification',
           largeIcon: 'ic_launcher',
           pressAction: { id: 'default' },
           color: '#0f172a',
         },
-      });
+      }, triggerTeste);
+
     } catch (e) {
       console.log("Erro no teste:", e);
     }

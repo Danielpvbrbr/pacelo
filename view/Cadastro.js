@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { TimestampTrigger, TriggerType, AndroidImportance, AndroidStyle } from '@notifee/react-native';
+import { NotificationService } from '../services/NotificationService';
 
 export default function Cadastro({ navigation, route }) {
   const { tipoOperacao } = route.params || { tipoOperacao: 'despesa' };
@@ -42,42 +43,38 @@ export default function Cadastro({ navigation, route }) {
     if (!isDespesa) return;
 
     try {
-      let nomeUsuario = 'Campeão'; // Padrão caso não tenha nome
+      let nomeUsuario = 'Campeão';
       const perfilJson = await AsyncStorage.getItem('@pacelo_perfil');
       if (perfilJson) {
         const perfil = JSON.parse(perfilJson);
         if (perfil.nome) nomeUsuario = perfil.nome;
       }
 
-      // 2. Permissões e Canal
+      // Pedir permissão continua sendo importante
       await notifee.requestPermission();
-      const channelId = await notifee.createChannel({
-        id: 'lembrete-financeiro',
-        name: 'Contas a Pagar',
-        importance: AndroidImportance.HIGH,
-        sound: 'default',
-      });
 
       const agora = new Date();
 
       for (const parcela of registro.parcelas) {
         const dataVenc = new Date(parcela.vencimento);
-        dataVenc.setHours(9, 0, 0, 0);
+        dataVenc.setHours(9, 0, 0, 0); // Notificar às 09:00 da manhã
 
         if (dataVenc > agora) {
           const trigger = {
             type: TriggerType.TIMESTAMP,
             timestamp: dataVenc.getTime(),
+            alarmManager: true, // Garante que o Android desperte o app
           };
 
-          await notifee.createTriggerNotification(
+          // USANDO O SERVICE INTELIGENTE AQUI
+          await NotificationService.schedule(
             {
               title: `<b>Vencimento: ${registro.nome}</b>`,
               body: `Sua parcela ${parcela.numero} vence hoje.`,
               subtitle: 'Fatura Disponível',
               android: {
-                channelId,
-                color: '#ffffff',
+                // O channelId será inserido automaticamente pelo NotificationService (com ou sem som)
+                color: '#ef4444',
                 smallIcon: 'ic_notification',
                 largeIcon: 'ic_launcher',
                 pressAction: { id: 'default' },
@@ -95,16 +92,16 @@ export default function Cadastro({ navigation, route }) {
                 ]
               },
             },
-            trigger,
+            trigger
           );
-          console.log(`Agendado para ${nomeUsuario}: ${dataVenc.toLocaleDateString()}`);
+          console.log(`Agendado via Service para ${nomeUsuario}: ${dataVenc.toLocaleDateString()}`);
         }
       }
     } catch (e) {
-      console.log("Erro ao agendar Notifee:", e);
+      console.log("Erro ao agendar via Service:", e);
     }
   };
-
+  
   const finalizarSalvamento = async (registroFinal) => {
     try {
       const keyDb = isDespesa ? '@pacelo_db' : '@pacelo_ganhos';
