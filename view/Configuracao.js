@@ -71,7 +71,7 @@ export default function Configuracao() {
     );
   };
 
-  const testarNotificacaoAgora = async () => {
+  const testarNotificacaoAgora = async () => {///Acionado ao fica precionado na versao 
     // 1. Pedir permissão
     await notifee.requestPermission();
 
@@ -198,7 +198,6 @@ export default function Configuracao() {
               thumbColor={sons ? "#fff" : "#f4f3f4"}
             />
           </View>
-
         </View>
 
         {/* SEÇÃO 3: ZONA DE PERIGO */}
@@ -214,24 +213,9 @@ export default function Configuracao() {
             </View>
           </View>
         </TouchableOpacity>
-
-         {/* <View style={{ marginTop: 20 }}>
-          <Text style={styles.sectionTitle}>AREA DE DESENVOLVEDOR</Text>
-          <TouchableOpacity
-            style={[styles.card, { backgroundColor: '#e0f2fe', borderColor: '#0ea5e9', borderWidth: 1 }]}
-            onPress={testarNotificacaoAgora}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={{ fontSize: 24, marginRight: 15 }}>🧪</Text>
-              <View>
-                <Text style={{ fontWeight: 'bold', color: '#0369a1' }}>Testar Notificação</Text>
-                <Text style={{ fontSize: 12, color: '#0284c7' }}>Dispara em 5 segundos</Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>  */}
-
-        <Text style={styles.versionText}>Versão {version} | Desenvolvido por ToraSys</Text>
+        <TouchableOpacity onLongPress={testarNotificacaoAgora}>
+          <Text style={styles.versionText}>Versão {version} | Desenvolvido por ToraSys</Text>
+        </TouchableOpacity>
         <View style={{ height: 50 }} />
       </ScrollView>
     </View>

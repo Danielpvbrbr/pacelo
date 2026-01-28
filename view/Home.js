@@ -18,8 +18,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import { changeIcon, getIcon } from 'react-native-change-icon';
 import ConfettiCannon from 'react-native-confetti-cannon';
 
-const { width } = Dimensions.get('window');
-
 export default function Home({ navigation }) {
   const [dados, setDados] = useState([]);
   const [nomeUsuario, setNomeUsuario] = useState('Campeão');
@@ -84,31 +82,44 @@ export default function Home({ navigation }) {
   const carregarDados = async () => {
     setCarregando(true);
     try {
+      // 1. Carregar Nome do Usuário
       const perfilJson = await AsyncStorage.getItem('@pacelo_perfil');
       if (perfilJson) setNomeUsuario(JSON.parse(perfilJson).nome);
 
+      // 2. Carregar Banco de Dados de Dívidas (Completo)
       const dividasJson = await AsyncStorage.getItem('@pacelo_db');
       let listaDividas = dividasJson ? JSON.parse(dividasJson) : [];
 
+      // 3. Carregar Banco de Dados de Ganhos
       const ganhosJson = await AsyncStorage.getItem('@pacelo_ganhos');
       const listaGanhos = ganhosJson ? JSON.parse(ganhosJson) : [];
 
+      // 4. Rodar Automação (Verificar datas e AutoPay)
       const { dividasAtualizadas, pagouAlgo, temAtrasoGeral } = verificarAutomacao(listaDividas);
 
+      // Se a automação pagou algo, atualizamos a lista local e o banco
       if (pagouAlgo) {
         listaDividas = dividasAtualizadas;
         await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaDividas));
       }
 
+      // 5. Atualizar Ícone (Alerta Vermelho/Padrão)
       gerenciarIconeApp(temAtrasoGeral);
 
+      // 6. Preparar lista VISUAL (O que vai aparecer na FlatList)
+      // Filtra: Não arquivados E Não totalmente pagos
       const listaAtiva = listaDividas.filter(item => {
         const tudoPago = item.parcelas.every(p => p.pago);
         return !item.arquivado && !tudoPago;
       });
 
+      // Atualiza a tela com os cards pendentes
       setDados(listaAtiva);
-      calcularFluxoCaixa(listaAtiva, listaGanhos);
+
+      // 7. Calcular Fluxo de Caixa (CORREÇÃO AQUI)
+      // IMPORTANTE: Passamos 'listaDividas' (TODAS as contas, inclusive as pagas/arquivadas)
+      // e não a 'listaAtiva'. Isso garante que o dinheiro gasto continue descontado do saldo.
+      calcularFluxoCaixa(listaDividas, listaGanhos);
 
     } catch (e) {
       console.log('Erro ao ler dados', e);
@@ -236,22 +247,37 @@ export default function Home({ navigation }) {
     if (indexReal === -1) return;
 
     const item = listaCompleta[indexReal];
+
+    // Localiza a primeira parcela aberta
     const parcelaIndex = item.parcelas.findIndex(p => !p.pago);
     if (parcelaIndex === -1) return;
 
+    // Validação de Saldo
     if (financeiro.saldoAtual < item.parcelas[parcelaIndex].valor) {
       Alert.alert("Saldo Insuficiente", "Sem caixa para pagar isso agora.");
       return;
     }
 
+    // --- LOGICA DE PAGAMENTO ---
+    // 1. Atualiza a parcela específica
     item.parcelas[parcelaIndex].pago = true;
-    item.parcelas[parcelaIndex].dataPagamento = new Date().toISOString(); // Grava data
+    item.parcelas[parcelaIndex].dataPagamento = new Date().toISOString();
 
+    // 2. VERIFICAÇÃO DE QUITAÇÃO TOTAL (A TRAVA)
+    // Checa se ainda existe QUALQUER parcela com pago === false
+    const temPendencia = item.parcelas.some(p => p.pago === false);
+
+    if (!temPendencia) {
+      // Se não tem pendência, grava a data do xeque-mate
+      item.dataQuitacao = new Date().toISOString();
+      confettiRef.current?.start();
+    } else {
+      // Caso contrário, garante que continue nulo
+      item.dataQuitacao = null;
+    }
+
+    // Salva no Banco e Atualiza Interface
     listaCompleta[indexReal] = item;
-
-    const parcelasRestantes = item.parcelas.filter(p => !p.pago).length;
-    if (parcelasRestantes === 0) confettiRef.current?.start();
-
     await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaCompleta));
     carregarDados();
 
@@ -286,12 +312,23 @@ export default function Home({ navigation }) {
         {
           text: "Confirmar",
           onPress: async () => {
+            // --- LOGICA DE PAGAMENTO ---
+            // 1. Atualiza a parcela que foi clicada
             itemBanco.parcelas[parcelaIndex].pago = true;
-            itemBanco.parcelas[parcelaIndex].dataPagamento = new Date().toISOString(); // Grava data
+            itemBanco.parcelas[parcelaIndex].dataPagamento = new Date().toISOString();
 
-            const faltam = itemBanco.parcelas.filter(p => !p.pago).length;
-            if (faltam === 0 && confettiRef.current) confettiRef.current.start();
+            // 2. VERIFICAÇÃO DE QUITAÇÃO TOTAL
+            // .every garante que TODAS as parcelas do array estejam com pago: true
+            const quitouTudo = itemBanco.parcelas.every(p => p.pago === true);
 
+            if (quitouTudo) {
+              itemBanco.dataQuitacao = new Date().toISOString();
+              if (confettiRef.current) confettiRef.current.start();
+            } else {
+              itemBanco.dataQuitacao = null;
+            }
+
+            // Salva e Sincroniza
             listaCompleta[indexReal] = itemBanco;
             await AsyncStorage.setItem('@pacelo_db', JSON.stringify(listaCompleta));
 
@@ -425,8 +462,14 @@ export default function Home({ navigation }) {
             )}
           </View>
         ) : (
-          <View style={{ paddingVertical: 10, alignItems: 'center' }}>
+          <View style={{ paddingVertical: 10, alignItems: 'center', backgroundColor: '#f0fdf4', borderRadius: 12 }}>
             <Text style={{ color: '#16a34a', fontWeight: 'bold' }}>CONCLUÍDO 🎉</Text>
+            {/* Nova lógica de data de baixa */}
+            {item.parcelas.length > 0 && (
+              <Text style={{ fontSize: 10, color: '#16a34a' }}>
+                Baixado em: {formatarData(item.parcelas[item.parcelas.length - 1].dataPagamento)}
+              </Text>
+            )}
           </View>
         )}
       </TouchableOpacity>

@@ -5,16 +5,19 @@ import { useFocusEffect } from '@react-navigation/native';
 
 export default function Historico() {
   const [listaPagas, setListaPagas] = useState([]);
-  const [totalQuitado, setTotalQuitado] = useState(0);
+  const [totalFiltrado, setTotalFiltrado] = useState(0);
+
+  const meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  const [mesFiltro, setMesFiltro] = useState(new Date().getMonth());
 
   const formatarMoeda = (valor) => {
     return 'R$ ' + valor.toFixed(2).replace('.', ',').replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.');
   };
 
   const formatarData = (isoDate) => {
-    if(!isoDate) return '-';
+    if (!isoDate) return '-';
     const data = new Date(isoDate);
-    return `${data.getDate().toString().padStart(2, '0')}/${(data.getMonth()+1).toString().padStart(2, '0')}/${data.getFullYear()}`;
+    return `${data.getDate().toString().padStart(2, '0')}/${(data.getMonth() + 1).toString().padStart(2, '0')}/${data.getFullYear()}`;
   };
 
   const carregarHistorico = async () => {
@@ -22,91 +25,95 @@ export default function Historico() {
       const json = await AsyncStorage.getItem('@pacelo_db');
       const todas = json ? JSON.parse(json) : [];
 
-      // FILTRO: Só quem tem TODAS as parcelas pagas
-      const apenasPagas = todas.filter(item => {
-        return item.parcelas.every(parcela => parcela.pago === true);
-      });
+      // FILTRO: Só entram as que possuem dataQuitacao preenchida (xeque-mate)
+      const apenasPagas = todas.filter(item => item.dataQuitacao !== null && item.dataQuitacao !== undefined);
 
-      // Ordenar: As que terminaram mais recentemente ficam em cima
-      apenasPagas.sort((a, b) => {
-        const ultimaA = a.parcelas[a.parcelas.length - 1].vencimento;
-        const ultimaB = b.parcelas[b.parcelas.length - 1].vencimento;
-        return new Date(ultimaB) - new Date(ultimaA);
-      });
-
-      // Calcular quanto dinheiro você já honrou
-      let soma = 0;
-      apenasPagas.forEach(item => soma += item.valorTotal);
+      // Ordenar: Pela data REAL da quitação (as mais recentes no topo)
+      apenasPagas.sort((a, b) => new Date(b.dataQuitacao) - new Date(a.dataQuitacao));
 
       setListaPagas(apenasPagas);
-      setTotalQuitado(soma);
+      calcularTotalPorMes(apenasPagas, mesFiltro);
 
     } catch (e) {
       console.log(e);
     }
   };
 
+  const calcularTotalPorMes = (dados, mesIndex) => {
+    const anoAtual = new Date().getFullYear();
+    const filtrados = dados.filter(item => {
+      // Usamos a data de quitação para o cálculo do total do cabeçalho
+      const dQuitacao = new Date(item.dataQuitacao);
+      return dQuitacao.getMonth() === mesIndex && dQuitacao.getFullYear() === anoAtual;
+    });
+
+    const soma = filtrados.reduce((acc, item) => acc + item.valorTotal, 0);
+    setTotalFiltrado(soma);
+  };
+
+  const mudarMes = (index) => {
+    setMesFiltro(index);
+    calcularTotalPorMes(listaPagas, index);
+  };
+
   useFocusEffect(useCallback(() => {
     carregarHistorico();
   }, []));
 
-  // --- APAGAR DO HISTÓRICO (Lixeira) ---
   const confirmarExclusao = (id) => {
     Alert.alert(
-        "Apagar Registro?",
-        "Isso remove a conta permanentemente do histórico.",
-        [
-            { text: "Cancelar", style: "cancel" },
-            { text: "Apagar", onPress: () => deletarItem(id), style: 'destructive' }
-        ]
+      "Apagar Registro?",
+      "Isso remove a conta permanentemente do histórico.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { text: "Apagar", onPress: () => deletarItem(id), style: 'destructive' }
+      ]
     );
   };
 
   const deletarItem = async (id) => {
     try {
-        const json = await AsyncStorage.getItem('@pacelo_db');
-        let todas = json ? JSON.parse(json) : [];
-        const novaLista = todas.filter(item => item.id !== id);
-        
-        await AsyncStorage.setItem('@pacelo_db', JSON.stringify(novaLista));
-        carregarHistorico();
-    } catch (e) {}
+      const json = await AsyncStorage.getItem('@pacelo_db');
+      let todas = json ? JSON.parse(json) : [];
+      const novaLista = todas.filter(item => item.id !== id);
+      await AsyncStorage.setItem('@pacelo_db', JSON.stringify(novaLista));
+      carregarHistorico();
+    } catch (e) { }
   };
 
-  const renderItem = ({ item }) => {
-    const ultimaParcela = item.parcelas[item.parcelas.length - 1];
+  // Filtra os itens da lista exibida com base na dataQuitacao
+  const dadosExibidos = listaPagas.filter(item => {
+    const d = new Date(item.dataQuitacao);
+    return d.getMonth() === mesFiltro && d.getFullYear() === new Date().getFullYear();
+  });
 
+  const renderItem = ({ item }) => {
     return (
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.card}
         activeOpacity={0.9}
-        onLongPress={() => confirmarExclusao(item.id)} // Segura pra limpar
+        onLongPress={() => confirmarExclusao(item.id)}
         delayLongPress={600}
       >
         <View style={styles.cardHeader}>
-            <View style={styles.iconContainer}>
-                <Text style={{fontSize: 18}}>🏆</Text>
-            </View>
-            <View style={{flex: 1}}>
-                <Text style={styles.titulo}>{item.nome}</Text>
-                <Text style={styles.subtitulo}>Finalizado em {formatarData(ultimaParcela.vencimento)}</Text>
-            </View>
-            <View style={styles.badge}>
-                <Text style={styles.badgeText}>CONCLUÍDO</Text>
-            </View>
+          <View style={styles.iconContainer}><Text style={{ fontSize: 18 }}>🏆</Text></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.titulo}>{item.nome}</Text>
+            {/* Texto informativo usando a data real do pagamento */}
+            <Text style={styles.subtitulo}>Quitado em {formatarData(item.dataQuitacao)}</Text>
+          </View>
+          <View style={styles.badge}><Text style={styles.badgeText}>CONCLUÍDO</Text></View>
         </View>
-
         <View style={styles.divisor} />
-
         <View style={styles.rowInfo}>
-            <View>
-                <Text style={styles.label}>Valor Total Pago</Text>
-                <Text style={styles.valor}>{formatarMoeda(item.valorTotal)}</Text>
-            </View>
-            <View style={{alignItems: 'flex-end'}}>
-                <Text style={styles.label}>Parcelas</Text>
-                <Text style={styles.infoParcelas}>{item.parcelas.length}x (Quitado)</Text>
-            </View>
+          <View>
+            <Text style={styles.label}>Valor Total Pago</Text>
+            <Text style={styles.valor}>{formatarMoeda(item.valorTotal)}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.label}>Parcelas</Text>
+            <Text style={styles.infoParcelas}>{item.parcelas.length}x (Finalizado)</Text>
+          </View>
         </View>
       </TouchableOpacity>
     );
@@ -115,30 +122,45 @@ export default function Historico() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#4338ca" />
-      
-      {/* CABEÇALHO ROXO (Vitória) */}
+
       <View style={styles.header}>
-        <Text style={styles.headerTitulo}>Dívidas Eliminadas</Text>
-        <Text style={styles.headerValor}>{formatarMoeda(totalQuitado)}</Text>
+        <Text style={styles.headerTitulo}>Dívidas Eliminadas em {meses[mesFiltro]}</Text>
+        <Text style={styles.headerValor}>{formatarMoeda(totalFiltrado)}</Text>
         <Text style={styles.headerSub}>Parabéns pela disciplina!</Text>
       </View>
 
+      <View style={styles.filtroContainer}>
+        <FlatList
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          data={meses}
+          keyExtractor={(item, index) => index.toString()}
+          renderItem={({ item, index }) => (
+            <TouchableOpacity
+              onPress={() => mudarMes(index)}
+              style={[styles.mesItem, mesFiltro === index && styles.mesAtivo]}
+            >
+              <Text style={[styles.mesTexto, mesFiltro === index && { color: '#fff' }]}>{item}</Text>
+            </TouchableOpacity>
+          )}
+        />
+      </View>
+
       <View style={styles.body}>
-        {listaPagas.length === 0 ? (
+        <FlatList
+          data={dadosExibidos}
+          keyExtractor={item => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={{ paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={() => (
             <View style={styles.emptyState}>
-                <Text style={styles.emptyEmoji}>🍃</Text>
-                <Text style={styles.emptyTitle}>Histórico Vazio</Text>
-                <Text style={styles.emptySub}>Assim que você pagar a última parcela de uma conta, ela aparecerá aqui como um troféu.</Text>
+              <Text style={styles.emptyEmoji}>🍃</Text>
+              <Text style={styles.emptyTitle}>Nada em {meses[mesFiltro]}</Text>
+              <Text style={styles.emptySub}>Contas finalizadas neste mês aparecerão aqui como troféus.</Text>
             </View>
-        ) : (
-            <FlatList
-                data={listaPagas}
-                keyExtractor={item => item.id}
-                renderItem={renderItem}
-                contentContainerStyle={{ paddingBottom: 100 }}
-                showsVerticalScrollIndicator={false}
-            />
-        )}
+          )}
+        />
       </View>
     </View>
   );
@@ -146,64 +168,41 @@ export default function Historico() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
-  
-  // --- HEADER ---
-  header: { 
-    backgroundColor: '#4338ca', // Roxo Índigo
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 30 : 70,
+  header: {
+    backgroundColor: '#4338ca',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 20 : 60,
     paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingBottom: 30,
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
     alignItems: 'center',
     elevation: 10,
-    shadowColor: '#4338ca',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
   },
-  headerTitulo: { color: '#a5b4fc', fontSize: 14, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
-  headerValor: { fontSize: 36, fontWeight: '800', color: '#fff', marginVertical: 5 },
-  headerSub: { color: '#e0e7ff', fontSize: 14, fontStyle: 'italic' },
-
-  // --- LISTA ---
-  body: { flex: 1, paddingHorizontal: 20, marginTop: 20 },
-
-  // --- CARD ---
-  card: { 
-    backgroundColor: '#fff', 
-    padding: 20, 
-    borderRadius: 16, 
-    marginBottom: 15, 
-    elevation: 2,
-    shadowColor: '#64748b',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e0e7ff'
+  headerTitulo: { color: '#a5b4fc', fontSize: 13, fontWeight: '600', textTransform: 'uppercase' },
+  headerValor: { fontSize: 34, fontWeight: '800', color: '#fff', marginVertical: 5 },
+  headerSub: { color: '#e0e7ff', fontSize: 13, fontStyle: 'italic' },
+  filtroContainer: { paddingVertical: 15, backgroundColor: '#fff' },
+  mesItem: { paddingHorizontal: 18, paddingVertical: 8, marginHorizontal: 5, borderRadius: 20, backgroundColor: '#f1f5f9' },
+  mesAtivo: { backgroundColor: '#4338ca' },
+  mesTexto: { fontSize: 13, color: '#64748b', fontWeight: 'bold' },
+  body: { flex: 1, paddingHorizontal: 20 },
+  card: {
+    backgroundColor: '#fff', padding: 18, borderRadius: 16, marginBottom: 12,
+    elevation: 2, borderWidth: 1, borderColor: '#e0e7ff'
   },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  iconContainer: {
-    width: 40, height: 40, borderRadius: 10, backgroundColor: '#fef3c7',
-    justifyContent: 'center', alignItems: 'center', marginRight: 12
-  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  iconContainer: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#fef3c7', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   titulo: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
-  subtitulo: { fontSize: 12, color: '#64748b' },
-  
-  badge: { backgroundColor: '#dcfce7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, alignSelf: 'flex-start' },
-  badgeText: { fontSize: 10, fontWeight: 'bold', color: '#15803d' },
-
+  subtitulo: { fontSize: 11, color: '#64748b' },
+  badge: { backgroundColor: '#dcfce7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  badgeText: { fontSize: 9, fontWeight: 'bold', color: '#15803d' },
   divisor: { height: 1, backgroundColor: '#f1f5f9', marginBottom: 12 },
-
   rowInfo: { flexDirection: 'row', justifyContent: 'space-between' },
-  label: { fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 2 },
-  valor: { fontSize: 16, fontWeight: 'bold', color: '#4338ca' }, // Valor em Roxo pra combinar
-  infoParcelas: { fontSize: 14, fontWeight: '600', color: '#334155' },
-
-  // --- EMPTY STATE ---
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40, marginTop: 50 },
-  emptyEmoji: { fontSize: 60, marginBottom: 20 },
-  emptyTitle: { fontSize: 20, fontWeight: 'bold', color: '#334155', marginBottom: 10 },
-  emptySub: { textAlign: 'center', color: '#64748b', lineHeight: 22 }
+  label: { fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' },
+  valor: { fontSize: 16, fontWeight: 'bold', color: '#4338ca' },
+  infoParcelas: { fontSize: 13, fontWeight: '600', color: '#334155' },
+  emptyState: { alignItems: 'center', marginTop: 50, paddingHorizontal: 20 },
+  emptyEmoji: { fontSize: 50, marginBottom: 10 },
+  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#334155' },
+  emptySub: { textAlign: 'center', color: '#64748b', fontSize: 13, marginTop: 5 }
 });
